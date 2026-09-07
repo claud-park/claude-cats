@@ -8,9 +8,13 @@ public final class StateCollector: @unchecked Sendable {
     public var projectLookupRetry: TimeInterval = 60
     /// transcript 를 다시 읽기까지의 최소 간격. mtime 이 바뀌어도 이 시간 전엔 안 읽는다.
     public var titleRefreshInterval: TimeInterval = 10
+    /// 알림을 지우는 안전망. 훅이 죽거나 이벤트를 놓쳐도 말풍선이 영원히 남지는 않게.
+    public var alertTTL: TimeInterval = 30 * 60
 
     /// transcript 는 수 MB 까지 자란다. 꼬리 256KB 만 본다.
     static let titleTailBytes = 262_144
+    /// 세션 하나가 기억하는 "이미 끝난 서브에이전트" 개수 상한.
+    static let stoppedAgentLimit = 200
 
     private let fs: any FileSystem
     private let claudeDir: URL
@@ -26,12 +30,30 @@ public final class StateCollector: @unchecked Sendable {
     /// key: sessionId. title 이 nil 이면 "아직 제목이 안 붙은 세션".
     private var titleCache: [String: (modified: Date, readAt: Date, title: String?)] = [:]
 
+    /// key: sessionId. 훅이 알려준 "사용자를 기다리는 중".
+    private(set) var alerts: [String: Alert] = [:]
+    /// 알림이 **처음 보인 틱**의 세션 상태. 이 상태가 바뀌면 알림을 지운다
+    /// (사용자가 답했거나 작업이 넘어갔다는 뜻).
+    private var alertStatus: [String: Status] = [:]
+    /// key: sessionId → agentId → 실행 중인 서브에이전트. SubagentStart 로 들어오고 Stop 으로 빠진다.
+    private(set) var hookAgents: [String: [String: HookAgent]] = [:]
+    /// key: sessionId. 이미 Stop 을 받은 agentId 들(오래된 순). mtime 휴리스틱이 다시
+    /// 살려내지 못하게 억제하고, 순서가 뒤집힌 Start 도 막는다.
+    private(set) var stoppedAgents: [String: [String]] = [:]
+
+    struct HookAgent: Equatable {
+        var type: String
+        var startedAt: Date
+    }
+
     public init(fileSystem: any FileSystem, claudeDir: URL) {
         self.fs = fileSystem
         self.claudeDir = claudeDir
     }
 
     public func collect(now: Date) -> Snapshot {
+        // 세션을 읽기 **전에** 훅 이벤트를 소화해야 같은 틱에 알림이 보인다.
+        ingestHookEvents(now: now)
         let sessionsDir = claudeDir.appendingPathComponent("sessions")
         guard let files = try? fs.list(sessionsDir) else {
             // 목록 조회 실패(일시적 오류 포함)는 캐시를 건드리지 않고 빈 스냅샷만 반환한다.
@@ -68,9 +90,13 @@ public final class StateCollector: @unchecked Sendable {
             guard !seenIds.contains(session.id) else { continue }
             seenIds.insert(session.id)
 
-            session.subagents = session.status == .busy
+            session.alert = resolveAlert(for: session, now: now)
+            // mtime 휴리스틱은 busy 세션만 훑는다. 훅이 세어 준 서브에이전트는 idle 세션에도
+            // 붙인다 — 프롬프트 앞에서 쉬는 동안 백그라운드 에이전트가 돌 수 있다.
+            let scanned = session.status == .busy
                 ? activeSubagents(for: session, now: now, seenMetaPaths: &seenMetaPaths)
                 : []
+            session.subagents = mergedSubagents(for: session.id, scanned: scanned)
             session.title = title(for: session, now: now)
             sessions.append(session)
         }
@@ -78,6 +104,11 @@ public final class StateCollector: @unchecked Sendable {
         sessionCache = sessionCache.filter { seenPaths.contains($0.key) }
         titleCache = titleCache.filter { seenIds.contains($0.key) }
         projectRootCache = projectRootCache.filter { seenIds.contains($0.key) }
+        // 세션이 사라지면 그 세션의 훅 상태도 같이 버린다(모르는 세션에 온 이벤트도 여기서 걸러진다).
+        alerts = alerts.filter { seenIds.contains($0.key) }
+        alertStatus = alertStatus.filter { alerts[$0.key] != nil }
+        hookAgents = hookAgents.filter { seenIds.contains($0.key) }
+        stoppedAgents = stoppedAgents.filter { seenIds.contains($0.key) }
         // 서브에이전트는 세션보다 훨씬 자주 생겼다 사라진다. 다른 캐시와 같은 규칙으로
         // 이번 틱에 실행 중이던 것만 남기지 않으면 프로세스 수명 내내 단조 증가한다.
         metaCache = metaCache.filter { seenMetaPaths.contains($0.key) }
@@ -170,6 +201,123 @@ public final class StateCollector: @unchecked Sendable {
             result.append(Subagent(id: id, description: description, lastActivity: st.modified))
         }
         return result.sorted { $0.id < $1.id }
+    }
+
+    // MARK: - 훅 이벤트
+
+    /// 훅 스크립트가 떨궈 놓은 파일 하나. 문서에 없는 필드는 무시하고, 없는 필드는 nil 이다.
+    struct HookEvent: Decodable {
+        let hookEventName: String
+        let sessionId: String
+        let notificationType: String?
+        let message: String?
+        let agentId: String?
+        let agentType: String?
+
+        enum CodingKeys: String, CodingKey {
+            case hookEventName = "hook_event_name"
+            case sessionId = "session_id"
+            case notificationType = "notification_type"
+            case message
+            case agentId = "agent_id"
+            case agentType = "agent_type"
+        }
+    }
+
+    /// `~/.claude/claude-cats/events/*.json` 을 이름 순(= 시간 순)으로 읽고 지운다.
+    /// 디렉터리가 없으면 훅이 안 깔린 것이다 — 만들지 않고 그냥 돌아간다.
+    /// 파일은 작고 드물어서 유휴 틱 비용은 `list` 한 번이다.
+    private func ingestHookEvents(now: Date) {
+        let dir = claudeDir.appendingPathComponent("claude-cats").appendingPathComponent("events")
+        guard let files = try? fs.list(dir) else { return }
+        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        where file.pathExtension == "json" {
+            // 못 읽든 못 파싱하든 파일은 지운다 — 안 그러면 같은 파일을 매 틱 다시 만난다.
+            defer { try? fs.remove(file) }
+            guard let data = try? fs.read(file),
+                  let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
+                log.info("dropped hook event: \(file.lastPathComponent, privacy: .public)")
+                continue
+            }
+            apply(event, now: now)
+        }
+    }
+
+    private func apply(_ event: HookEvent, now: Date) {
+        let sid = event.sessionId
+        guard !sid.isEmpty else { return }
+        switch event.hookEventName {
+        case "Notification":
+            // 우리가 보는 세 종류 말고는 무시한다(auth_success 등).
+            guard let kind = AlertKind(notificationType: event.notificationType) else { return }
+            alerts[sid] = Alert(kind: kind, message: event.message ?? "", since: now)
+            alertStatus[sid] = nil          // 새 알림이니 상태 기준점을 다시 잡는다
+        case "UserPromptSubmit":
+            clearAlert(sid)                 // 사용자가 답했다
+        case "SubagentStart":
+            guard let agentId = event.agentId, !agentId.isEmpty else { return }
+            // 같은 초에 만들어진 파일은 이름 순이 시간 순이 아닐 수 있다. Stop 을 이미 봤으면
+            // 뒤늦게 온 Start 로 되살리지 않는다.
+            guard !(stoppedAgents[sid]?.contains(agentId) ?? false) else { return }
+            hookAgents[sid, default: [:]][agentId] =
+                HookAgent(type: event.agentType ?? "", startedAt: now)
+        case "SubagentStop":
+            guard let agentId = event.agentId, !agentId.isEmpty else { return }
+            hookAgents[sid]?[agentId] = nil
+            if hookAgents[sid]?.isEmpty == true { hookAgents[sid] = nil }
+            recordStop(sid, agentId)
+        default:
+            break
+        }
+    }
+
+    private func recordStop(_ sessionId: String, _ agentId: String) {
+        var stopped = stoppedAgents[sessionId] ?? []
+        guard !stopped.contains(agentId) else { return }
+        stopped.append(agentId)
+        if stopped.count > Self.stoppedAgentLimit {
+            stopped.removeFirst(stopped.count - Self.stoppedAgentLimit)
+        }
+        stoppedAgents[sessionId] = stopped
+    }
+
+    private func clearAlert(_ sessionId: String) {
+        alerts[sessionId] = nil
+        alertStatus[sessionId] = nil
+    }
+
+    /// 알림은 세 가지로 사라진다: 세션 상태가 바뀌거나(사용자가 답했다), TTL 이 지나거나,
+    /// 세션이 없어지거나(위 프루닝). `UserPromptSubmit` 은 이벤트 쪽에서 이미 지웠다.
+    private func resolveAlert(for session: Session, now: Date) -> Alert? {
+        guard let alert = alerts[session.id] else { return nil }
+        if now.timeIntervalSince(alert.since) >= alertTTL {
+            clearAlert(session.id)
+            return nil
+        }
+        guard let anchored = alertStatus[session.id] else {
+            // 알림이 처음 보이는 틱. 지금 상태를 기준점으로 잡는다.
+            alertStatus[session.id] = session.status
+            return alert
+        }
+        if anchored != session.status {
+            clearAlert(session.id)
+            return nil
+        }
+        return alert
+    }
+
+    /// mtime 휴리스틱과 훅이 센 서브에이전트의 합집합에서, 이미 Stop 을 받은 id 를 뺀다.
+    private func mergedSubagents(for sessionId: String, scanned: [Subagent]) -> [Subagent] {
+        let hooked = hookAgents[sessionId] ?? [:]
+        if hooked.isEmpty, stoppedAgents[sessionId] == nil { return scanned }
+        var byId: [String: Subagent] = [:]
+        for sub in scanned { byId[sub.id] = sub }
+        for (agentId, agent) in hooked {
+            // 훅이 센 쪽이 정확하다 — 같은 id 면 덮어쓴다.
+            byId[agentId] = Subagent(id: agentId, description: agent.type, lastActivity: agent.startedAt)
+        }
+        let stopped = Set(stoppedAgents[sessionId] ?? [])
+        return byId.values.filter { !stopped.contains($0.id) }.sorted { $0.id < $1.id }
     }
 
     // MARK: - 세션 제목

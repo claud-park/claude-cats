@@ -50,6 +50,30 @@ enum Fixtures {
         """
     }
 
+    /// 훅 스크립트가 떨구는 이벤트 파일 경로. 이름 순이 곧 처리 순서다.
+    static func eventPath(_ name: String) -> String {
+        "/home/.claude/claude-cats/events/\(name).json"
+    }
+
+    /// 공통 필드만 있는 훅 페이로드. `extra` 는 앞에 쉼표 없이 `"k":v` 형태로 넘긴다.
+    static func hookEvent(_ event: String, sessionId: String = "sess", extra: String = "") -> String {
+        """
+        {"session_id":"\(sessionId)","transcript_path":"/home/.claude/projects/p/\(sessionId).jsonl",\
+        "cwd":"/Users/me/proj_x","hook_event_name":"\(event)"\(extra.isEmpty ? "" : "," + extra)}
+        """
+    }
+
+    static func notification(type: String, message: String, sessionId: String = "sess") -> String {
+        hookEvent("Notification", sessionId: sessionId,
+                  extra: #""notification_type":"\#(type)","message":"\#(message)""#)
+    }
+
+    static func subagentEvent(_ event: String, agentId: String, agentType: String = "fork",
+                              sessionId: String = "sess") -> String {
+        hookEvent(event, sessionId: sessionId,
+                  extra: #""agent_id":"\#(agentId)","agent_type":"\#(agentType)""#)
+    }
+
     static func metaJSON(description: String) -> String {
         """
         {"agentType":"fork","isFork":true,"description":"\(description)",\

@@ -17,6 +17,18 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
         files[path] = nil
     }
 
+    /// 지운 경로를 순서대로 기록한다(훅 이벤트 파일이 실제로 치워지는지 확인용).
+    var removed: [String] = []
+    /// 이 경로들의 remove 는 던진다.
+    var failRemoves: Set<String> = []
+
+    func remove(_ url: URL) throws {
+        guard !failRemoves.contains(url.path) else { throw CocoaError(.fileWriteNoPermission) }
+        guard files[url.path] != nil else { throw CocoaError(.fileNoSuchFile) }
+        files[url.path] = nil
+        removed.append(url.path)
+    }
+
     func touch(_ path: String, modified: Date) {
         guard let f = files[path] else { return }
         files[path] = (f.data, modified)
