@@ -225,19 +225,22 @@ protocol FileSystem {
 
 ## 10. 프로젝트 구조
 
+순수 로직은 라이브러리 타깃 `ClaudeCatsCore` 에 두어 `@testable import` 로 테스트하고, AppKit
+코드는 실행 타깃 `ClaudeCats` 에만 둔다. Core 는 `import AppKit` 을 하지 않는다.
+
 ```
 claude-cats/
-  Package.swift                 # executableTarget ClaudeCats + testTarget
+  Package.swift                 # ClaudeCatsCore(lib) + ClaudeCats(exec) + ClaudeCatsCoreTests
+  Sources/ClaudeCatsCore/
+    Models.swift, FileSystem.swift, StateCollector.swift,
+    StableHash.swift, Scene.swift, PowerPolicy.swift, LayoutDiffer.swift
   Sources/ClaudeCats/
-    App/            AppDelegate.swift, StatusMenu.swift
-    Collector/      StateCollector.swift, FileSystem.swift, Models.swift
-    Scene/          Scene.swift, Hash.swift
-    Window/         DesktopWindow.swift, CatLayer.swift, CatShapes.swift
-    Power/          PowerPolicy.swift
-  Tests/ClaudeCatsTests/
-    Fixtures/       (sessions/*.json, projects/.../subagents/*)
+    main.swift, AppDelegate.swift, AppController.swift, PowerMonitor.swift,
+    StatusMenu.swift, CatShapes.swift, CatLayer.swift, DesktopWindow.swift
+  Tests/ClaudeCatsCoreTests/
+    FakeFileSystem.swift, Fixtures.swift, *Tests.swift
   scripts/bundle.sh             # .app 번들 + Info.plist(LSUIElement) 생성
-  docs/superpowers/specs/
+  docs/superpowers/specs/, docs/superpowers/plans/
 ```
 
 ## 측정 기록
