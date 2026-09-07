@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256">
+  <!-- busy 포즈. 털색 플레이스홀더: #FUR(세션 색), #FURDARK(어두운 털). 꼬리는 tail-a/tail-b 두 프레임. -->
+  <g id="tail-a">
+      <path d="M49 50 Q64 48 60 32" fill="none" stroke="#FUR" stroke-width="6.5" stroke-linecap="round"/>
+      <path d="M60.5 35 L60 31.5" fill="none" stroke="#FURDARK" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <g id="tail-b">
+      <path d="M49 50 Q64 54 62 62" fill="none" stroke="#FUR" stroke-width="6.5" stroke-linecap="round"/>
+      <path d="M62 58.5 L62 62" fill="none" stroke="#FURDARK" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <g id="body">
+      <!-- 몸: 복슬한 실루엣(작은 굴곡) -->
+      <path d="M15 44 C13 38 15 32 21 30 C24 28 28 29 32 29 C36 29 40 28 43 30 C49 32 51 38 49 44 C51 48 51 54 48 58 C46 61 40 61 32 61 C24 61 18 61 16 58 C13 54 13 48 15 44 Z" fill="#FUR"/>
+      <!-- 가슴·배 흰 패치 -->
+      <path d="M25 33 C28 31 36 31 39 33 C43 39 43 50 40 57 C37 59 27 59 24 57 C21 50 21 39 25 33 Z" fill="#f3efe8"/>
+      <!-- 앞발 -->
+      <path d="M17 58 C17 55 22 54 25 55 C28 54 31 56 30 59 C30 62 18 62 17 58 Z" fill="#f3efe8"/>
+      <path d="M34 59 C33 56 36 54 39 55 C42 54 47 55 47 58 C46 62 34 62 34 59 Z" fill="#f3efe8"/>
+      <path d="M21.5 60.5 v1.3 M24.5 61 v1.3 M27.5 60.5 v1.3 M36.5 60.5 v1.3 M39.5 61 v1.3 M42.5 60.5 v1.3" stroke="#221f22" stroke-width="0.8" stroke-linecap="round" opacity="0.45"/>
+      <!-- 귀 -->
+      <path d="M18 19 L19 3 L30 12 Z" fill="#FUR"/>
+      <path d="M46 19 L45 3 L34 12 Z" fill="#FUR"/>
+      <path d="M20.5 15.5 L21 7 L27.5 12.5 Z" fill="#e2a3a3"/>
+      <path d="M43.5 15.5 L43 7 L36.5 12.5 Z" fill="#e2a3a3"/>
+      <!-- 머리: 볼 털이 살짝 넓은 형태 -->
+      <path d="M17 23 C17 14 23 10 32 10 C41 10 47 14 47 23 C48 29 45 34 40 36 C36 38 28 38 24 36 C19 34 16 29 17 23 Z" fill="#FUR"/>
+      <!-- 얼굴 흰 패치 (이마 blaze + 주둥이) -->
+      <path d="M32 12.5 L29.5 23.5 C25.5 24.5 24 29 26 33.5 C28 36.5 36 36.5 38 33.5 C40 29 38.5 24.5 34.5 23.5 Z" fill="#f3efe8"/>
+      <!-- 눈 -->
+      <ellipse cx="26" cy="24.5" rx="3.4" ry="3.8" fill="#c9b458"/>
+      <ellipse cx="38" cy="24.5" rx="3.4" ry="3.8" fill="#c9b458"/>
+      <ellipse cx="26" cy="24.8" rx="2.3" ry="2.7" fill="#221f22"/>
+      <ellipse cx="38" cy="24.8" rx="2.3" ry="2.7" fill="#221f22"/>
+      <circle cx="27" cy="23.5" r="1" fill="#fff"/>
+      <circle cx="39" cy="23.5" r="1" fill="#fff"/>
+      <!-- 코·입 -->
+      <path d="M30.5 29.5 L33.5 29.5 L32 31.5 Z" fill="#d68f8f"/>
+      <path d="M32 31.5 v1.5 M32 33 q-2 2 -3.5 0.5 M32 33 q2 2 3.5 0.5" fill="none" stroke="#221f22" stroke-width="0.8" stroke-linecap="round" opacity="0.7"/>
+      <!-- 수염 -->
+      <path d="M28 31 L18 29 M28 32.5 L17 33 M36 31 L46 29 M36 32.5 L47 33" stroke="#e8e4dc" stroke-width="0.7" stroke-linecap="round" opacity="0.85"/>
+  </g>
+</svg>
