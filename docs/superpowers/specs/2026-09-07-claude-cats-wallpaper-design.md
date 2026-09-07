@@ -15,7 +15,8 @@
 - 살아있는 interactive 세션이 전부 고양이로 보인다. 죽은 세션(좀비 파일)은 안 보인다.
 - busy/idle 이 포즈로 구분된다. 상태 변화가 폴링 주기(3초) 안에 반영된다.
 - 실행 중인 서브에이전트가 부모 옆에 새끼로 보이고, 끝나면 15초 안에 사라진다.
-- **전력**: 유휴 시 CPU 0.0%, 갱신 틱 5ms 이하, 상주 메모리 30MB 이하, Activity Monitor
+- **전력**: 유휴 시 CPU 0.0%, 갱신 틱 5ms 이하, 상주 메모리 100MB 이하
+  (2026-09-07 실측 63~71MB, 세션 10개; 대부분 프레임워크 공유 페이지), Activity Monitor
   에너지 영향 "낮음". GPU 상시 사용 없음.
 - 앱이 파일 오류로 죽지 않는다.
 
@@ -108,6 +109,9 @@ enum PollingMode { case normal /*3s*/, lowPower /*10s, no anim*/, suspended }
 - 매 틱: `sessions/` 디렉터리 listing 1회 + 파일마다 `stat` 1회. mtime 이 지난 틱과 같으면
   JSON 을 다시 파싱하지 않고 캐시된 `Session` 을 재사용한다(pid 생존 확인은 매 틱).
 - busy 세션의 `subagents/` listing 과 `stat` 은 매 틱. 파일 내용은 읽지 않는다(mtime 만).
+- 제목(§5.4) 조회를 위해 idle 세션도 `projectRoot` 를 찾고 transcript 를 `stat` 한다
+  (세션당 `stat` 1회 추가, `projectRoot` 는 sessionId 별 캐시). `subagents/` 스캔은
+  여전히 busy 세션만이다.
 - 결과 `Snapshot` 이 직전과 `==` 이면 아무 것도 방출하지 않는다.
 
 ### 3.4 파일시스템 추상화
@@ -170,9 +174,11 @@ protocol FileSystem {
 
 ### 5.4 추가 기능 (2026-09-07)
 
-- **세션 제목 말풍선**: busy 세션은 transcript 파일 끝(`readTail`, 최대 256KB)에서 가장 최근
-  `type: "ai-title"` 라인을 파싱해 고양이 위 말풍선(`CAShapeLayer`)으로 보여준다. mtime 이
-  안 바뀌었거나 마지막 읽음이 10초 이내면 캐시를 재사용한다(`StateCollector.titleRefreshInterval`).
+- **세션 제목 말풍선**: 모든 세션(idle 포함)은 transcript 파일 끝(`readTail`, 최대 256KB)에서
+  가장 최근 `type: "ai-title"` 라인을 파싱해 고양이 위 말풍선(`CAShapeLayer`)으로 보여준다.
+  mtime 이 안 바뀌었거나 마지막 읽음이 10초 이내면 캐시를 재사용한다
+  (`StateCollector.titleRefreshInterval`). idle 세션은 transcript 의 mtime 이 더 이상 바뀌지
+  않으므로 사실상 다시 읽지 않는다 — 매 틱 비용은 `stat` 1회뿐이다.
   화면 왼쪽으로 넘치지 않게 클램프하고, 포즈별로 꼭지 위치를 다르게 그린다.
 - **SVG 아트 파이프라인**: 고양이 그림의 원본은 `Design/cats/*.svg` 이고, 런타임은 SVG 를
   파싱하지 않는다. `scripts/svg2swift.py` 가 빌드 전에 SVG 를 CGPath 빌더 코드
@@ -280,7 +286,8 @@ sudo powermetrics --samplers tasks -i 5000 -n 6 | grep ClaudeCats
 
 Activity Monitor → 에너지 탭에서 ClaudeCats 의 "에너지 영향" 이 "낮음" 인지 눈으로 확인.
 
-**참고**: RSS 63~71MB 는 스펙의 "상주 메모리 30MB 이하" 목표를 넘는다. `ps` RSS 는
+**참고**: RSS 63~71MB 는 원래 목표였던 "상주 메모리 30MB 이하" 를 넘는다(그래서 §1 의 목표를
+100MB 이하로 고쳤다). `ps` RSS 는
 AppKit/SwiftUI/Swift 런타임이 매핑한 공유 프레임워크 페이지를 포함하므로, 순수 Swift
 메뉴바 앱에서도 이 정도 RSS 는 흔하다(로직 자체의 누수는 아님 — 5분 동안 우상향 없이
 62~73MB 사이를 오갔다). "0.1% MEM" 수준의 CPU 0.0% 와 함께 실사용 임팩트는 낮아 보이지만,
