@@ -77,10 +77,12 @@ final class CatLayer: CALayer {
         tailA.isHidden = false
         tailB.isHidden = true
 
-        labelLayer.string = p.label.map(Self.outlinedLabel)
+        labelLayer.string = p.label.map { Self.outlinedLabel($0, maxWidth: labelLayer.bounds.width) }
         labelLayer.isHidden = p.label == nil
 
-        badgeLayer.string = p.overflowCount > 0 ? Self.outlinedLabel("+\(p.overflowCount)") : nil
+        badgeLayer.string = p.overflowCount > 0
+            ? Self.outlinedLabel("+\(p.overflowCount)", maxWidth: badgeLayer.bounds.width)
+            : nil
         badgeLayer.isHidden = p.overflowCount == 0
     }
 
@@ -92,7 +94,23 @@ final class CatLayer: CALayer {
     }
 
     /// 흰 글자 + 검은 외곽선(배경 박스 없음). 음수 strokeWidth = fill + stroke.
-    private static func outlinedLabel(_ text: String) -> NSAttributedString {
+    ///
+    /// CATextLayer 는 truncationMode 를 .end 로 둬도 폭을 넘는 attributed string 을
+    /// 아예 그리지 않는다(음수 strokeWidth 조합에서 재현: 렌더 픽셀 0). 그래서
+    /// 레이어에 맡기지 않고 문자열을 직접 잘라서 넘긴다.
+    private static func outlinedLabel(_ text: String, maxWidth: CGFloat) -> NSAttributedString {
+        var result = attributedLabel(text)
+        guard result.size().width > maxWidth else { return result }
+        var chars = Array(text)
+        while chars.count > 1 {
+            chars.removeLast()
+            result = attributedLabel(String(chars) + "…")
+            if result.size().width <= maxWidth { break }
+        }
+        return result
+    }
+
+    private static func attributedLabel(_ text: String) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
             .foregroundColor: NSColor.white,
