@@ -196,18 +196,53 @@ import Foundation
     }
 
     /// 권한을 승인하면 Claude 가 도구를 돌리고 transcript 에 append 한다 — 제일 정확한 신호다.
-    @Test func transcriptWriteAfterTheAlertClearsIt() {
+    /// 다만 알림 **직후**에 붙는 줄은 알림을 띄운 그 턴이 자기 기록을 마저 쓰는 것이라
+    /// `alertClearGrace` 만큼 봐준다.
+    @Test func transcriptWriteAfterTheGraceWindowClearsTheAlert() {
         let fs = makeFS(status: "busy")
         let transcript = Fixtures.transcriptPath(encodedCwd: encoded, sessionId: "sess")
         fs.add(transcript, Fixtures.titleLine("t") + "\n", modified: now.addingTimeInterval(-5))
         addEvent(fs, "1", Fixtures.notification(type: "permission_prompt", message: "x"))
         let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
-        #expect(c.collect(now: now).sessions[0].alert != nil)
+        #expect(c.collect(now: now).sessions[0].alert?.since == now)
         // transcript 가 그대로면 계속 기다리는 중이다.
         #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert != nil)
 
-        fs.touch(transcript, modified: now.addingTimeInterval(4))
-        #expect(c.collect(now: now.addingTimeInterval(6)).sessions[0].alert == nil)
+        // 유예 안(+3초)에 붙은 줄은 무시한다.
+        fs.touch(transcript, modified: now.addingTimeInterval(3))
+        #expect(c.collect(now: now.addingTimeInterval(4)).sessions[0].alert != nil)
+        // 경계(정확히 +5초)도 아직 유예 안이다.
+        fs.touch(transcript, modified: now.addingTimeInterval(5))
+        #expect(c.collect(now: now.addingTimeInterval(5)).sessions[0].alert != nil)
+        // 유예를 넘긴 줄은 "답했다"로 읽는다.
+        fs.touch(transcript, modified: now.addingTimeInterval(7))
+        #expect(c.collect(now: now.addingTimeInterval(8)).sessions[0].alert == nil)
+    }
+
+    /// 유예 창은 조절할 수 있어야 한다(테스트·튜닝용).
+    @Test func graceWindowIsConfigurable() {
+        let fs = makeFS(status: "busy")
+        let transcript = Fixtures.transcriptPath(encodedCwd: encoded, sessionId: "sess")
+        fs.add(transcript, Fixtures.titleLine("t") + "\n", modified: now.addingTimeInterval(-5))
+        addEvent(fs, "1", Fixtures.notification(type: "permission_prompt", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        c.alertClearGrace = 0
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+        fs.touch(transcript, modified: now.addingTimeInterval(1))
+        #expect(c.collect(now: now.addingTimeInterval(2)).sessions[0].alert == nil)
+    }
+
+    /// 알림 시각은 틱 시각이 아니라 **이벤트 파일 mtime** 이다. 폴링 간격(최대 3초)만큼,
+    /// 앱이 꺼져 있었다면 그보다 훨씬 벌어진다 — 유예도 TTL 도 훅이 터진 때부터 재야 한다.
+    @Test func alertSinceComesFromTheEventFileMtime() {
+        let fs = makeFS()
+        let fired = now.addingTimeInterval(-120)
+        fs.add(Fixtures.eventPath("1"), Fixtures.notification(type: "idle_prompt", message: "x"),
+               modified: fired)
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert?.since == fired)
+        // TTL 도 그 시각부터 잰다 — 이미 28분 전에 터졌으면 2분 뒤에 만료된다.
+        #expect(c.collect(now: fired.addingTimeInterval(30 * 60)).sessions[0].alert == nil)
     }
 
     /// idle → busy 는 새 작업이 시작됐다는 뜻이라 알림을 지운다.

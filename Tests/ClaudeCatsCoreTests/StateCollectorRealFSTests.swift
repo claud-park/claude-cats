@@ -33,9 +33,14 @@ import Foundation
         try body(root, StateCollector(fileSystem: RealFileSystem(), claudeDir: root))
     }
 
-    func writeEvent(_ root: URL, _ name: String, _ json: String) throws {
+    /// `modified` 를 주면 그 시각으로 mtime 을 박는다 — 이벤트 시각이 곧 알림 시각이다.
+    func writeEvent(_ root: URL, _ name: String, _ json: String, modified: Date? = nil) throws {
         let dir = root.appendingPathComponent("claude-cats").appendingPathComponent("events")
-        try Data((json + "\n").utf8).write(to: dir.appendingPathComponent(name + ".json"))
+        let url = dir.appendingPathComponent(name + ".json")
+        try Data((json + "\n").utf8).write(to: url)
+        if let modified {
+            try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+        }
     }
 
     func eventCount(_ root: URL) throws -> Int {
@@ -44,32 +49,46 @@ import Foundation
     }
 
     /// 권한을 승인하면 Claude 가 도구를 돌리고 transcript 에 append 한다. 그 mtime 변화가
-    /// 알림을 푸는 신호다 — 여기서는 그 append 를 흉내 낸다.
-    @Test func permissionAlertClearsWhenTheTranscriptGrows() throws {
+    /// 알림을 푸는 신호다 — 다만 알림 직후(`alertClearGrace` 안)에 붙는 줄은 알림을 띄운
+    /// 그 턴이 자기 기록을 마저 쓰는 것이라 무시해야 한다.
+    ///
+    /// 시각은 전부 진짜 파일 mtime 이다(알림 시각 = 이벤트 파일, 해제 판정 = transcript).
+    /// 테스트가 몇 초씩 기다리지 않게 mtime 을 직접 박아 둔다.
+    @Test func permissionAlertClearsOnlyAfterTheGraceWindow() throws {
         try withClaudeDir(status: "busy") { root, collector in
-            try writeEvent(root, "0001", Fixtures.notification(
-                type: "permission_prompt", message: "Claude needs your permission to run Bash",
-                sessionId: sessionId))
-
-            let start = Date()
-            let alerted = collector.collect(now: start).sessions
-            #expect(alerted.count == 1)
-            #expect(alerted[0].alert?.kind == .permission)
-            #expect(try eventCount(root) == 0)      // RealFileSystem.remove 가 실제로 지웠다
-
-            // transcript 가 그대로면 계속 기다리는 중이다.
-            #expect(collector.collect(now: start.addingTimeInterval(3)).sessions[0].alert != nil)
-
-            // 우리가 만든 transcript 에 한 줄 덧붙인다(= 도구가 돌았다).
+            let fired = Date().addingTimeInterval(-60)      // 훅이 1분 전에 터졌다고 치자
             let transcript = root.appendingPathComponent("projects").appendingPathComponent(encoded)
                 .appendingPathComponent(sessionId + ".jsonl")
-            let handle = try FileHandle(forWritingTo: transcript)
-            try handle.seekToEnd()
-            try handle.write(contentsOf: Data((Fixtures.messageLine("ran it", sessionId: sessionId) + "\n").utf8))
-            try handle.close()
+            // 알림 **전에** 마지막으로 쓰인 상태로 되돌린다(하네스는 지금 시각으로 만든다).
+            try FileManager.default.setAttributes(
+                [.modificationDate: fired.addingTimeInterval(-10)], ofItemAtPath: transcript.path)
+            try writeEvent(root, "0001", Fixtures.notification(
+                type: "permission_prompt", message: "Claude needs your permission to run Bash",
+                sessionId: sessionId), modified: fired)
 
-            #expect(collector.collect(now: Date().addingTimeInterval(1)).sessions[0].alert == nil)
+            let alerted = collector.collect(now: Date()).sessions
+            #expect(alerted.count == 1)
+            #expect(alerted[0].alert?.kind == .permission)
+            #expect(alerted[0].alert?.since == fired)       // 틱 시각이 아니라 훅이 터진 때
+            #expect(try eventCount(root) == 0)              // RealFileSystem.remove 가 실제로 지웠다
+
+            // 우리가 만든 transcript 에 한 줄 덧붙인다(= 그 턴이 기록을 마저 쓴다).
+            try append(transcript, "still writing", at: fired.addingTimeInterval(2))
+            #expect(collector.collect(now: Date()).sessions[0].alert != nil)
+
+            // 유예를 넘겨 붙은 줄은 "승인하고 도구가 돌았다"는 뜻이다.
+            try append(transcript, "ran the tool", at: fired.addingTimeInterval(6))
+            #expect(collector.collect(now: Date()).sessions[0].alert == nil)
         }
+    }
+
+    /// transcript 에 한 줄 붙이고 mtime 을 원하는 시각으로 박는다.
+    func append(_ url: URL, _ text: String, at modified: Date) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((Fixtures.messageLine(text, sessionId: sessionId) + "\n").utf8))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
     }
 
     /// 새끼 id 는 transcript 경로에서 뽑는다. 진짜 파일로도 한 번 확인한다.

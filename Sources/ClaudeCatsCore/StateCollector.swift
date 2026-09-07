@@ -10,6 +10,9 @@ public final class StateCollector: @unchecked Sendable {
     public var titleRefreshInterval: TimeInterval = 10
     /// 알림을 지우는 안전망. 훅이 죽거나 이벤트를 놓쳐도 말풍선이 영원히 남지는 않게.
     public var alertTTL: TimeInterval = 30 * 60
+    /// 알림 직후 transcript 에 붙는 줄은 "사용자가 답했다"가 아니다 — 알림을 띄운 그 턴이
+    /// 아직 자기 기록을 마저 쓰는 중이다. 이만큼은 봐준다.
+    public var alertClearGrace: TimeInterval = 5
     /// `SubagentStop` 을 놓쳤을 때 새끼를 거두는 안전망. 서브에이전트는 몇 시간씩 돌기도 한다.
     public var hookAgentTTL: TimeInterval = 4 * 60 * 60
 
@@ -63,7 +66,7 @@ public final class StateCollector: @unchecked Sendable {
 
     public func collect(now: Date) -> Snapshot {
         // 세션을 읽기 **전에** 훅 이벤트를 소화해야 같은 틱에 알림이 보인다.
-        ingestHookEvents(now: now)
+        ingestHookEvents()
         let sessionsDir = claudeDir.appendingPathComponent("sessions")
         guard let files = try? fs.list(sessionsDir) else {
             // 목록 조회 실패(일시적 오류 포함)는 캐시를 건드리지 않고 빈 스냅샷만 반환한다.
@@ -264,7 +267,8 @@ public final class StateCollector: @unchecked Sendable {
     ///
     /// 앱이 꺼져 있는 동안 훅은 계속 파일을 쌓는다. 한 틱에 다 삼키면 폴링 틱이 길어지므로
     /// `eventsPerTick` 만 처리하고 나머지는 다음 틱으로 넘긴다.
-    private func ingestHookEvents(now: Date) {
+    /// 틱 시각은 안 쓴다 — 이벤트마다 자기 파일 mtime 을 시각으로 삼는다.
+    private func ingestHookEvents() {
         let dir = claudeDir.appendingPathComponent("claude-cats").appendingPathComponent("events")
         guard let files = try? fs.list(dir) else { return }
         // 파일 이름의 초 단위 타임스탬프는 같은 초 안에서 순서를 못 정한다. mtime(APFS 는
@@ -297,11 +301,15 @@ public final class StateCollector: @unchecked Sendable {
                 log.info("dropped hook event: \(entry.url.lastPathComponent, privacy: .public)")
                 continue
             }
-            apply(event, now: now)
+            // 이벤트 시각은 틱 시각이 아니라 **파일 mtime** 이다 — 훅이 실제로 터진 때.
+            // 폴링 간격(최대 3초)만큼, 앱이 꺼져 있었다면 그보다 훨씬 크게 벌어진다.
+            apply(event, at: entry.modified)
         }
     }
 
-    private func apply(_ event: HookEvent, now: Date) {
+    /// `at` 은 훅이 터진 시각(이벤트 파일 mtime)이다. 알림 유예·TTL 과 서브에이전트 나이가
+    /// 전부 여기서 재진다 — 앱이 한참 꺼져 있다 켜져도 시계가 밀리지 않게.
+    private func apply(_ event: HookEvent, at now: Date) {
         let sid = event.sessionId
         guard !sid.isEmpty else { return }
         switch event.hookEventName {
@@ -362,9 +370,11 @@ public final class StateCollector: @unchecked Sendable {
     /// 알림이 사라지는 경우는 다섯이다.
     ///
     /// 1. `UserPromptSubmit` — 사용자가 답했다 (이벤트 쪽에서 이미 지웠다)
-    /// 2. **transcript mtime 이 `since` 를 지나갔다** — 권한을 승인하면 Claude 가 도구를 돌리고
-    ///    transcript 에 append 한다. 제일 정확한 "답했다" 신호다. stat 은 제목 조회가 이미
-    ///    하고 있으므로 공짜다(값을 넘겨받는다).
+    /// 2. **transcript mtime 이 `since + alertClearGrace` 를 지나갔다** — 권한을 승인하면
+    ///    Claude 가 도구를 돌리고 transcript 에 append 한다. 제일 정확한 "답했다" 신호다.
+    ///    stat 은 제목 조회가 이미 하고 있으므로 공짜다(값을 넘겨받는다).
+    ///    유예를 두는 이유: 알림을 띄운 그 턴이 자기 기록을 마저 쓰느라 직후에 한두 줄 더
+    ///    붙는다. 그걸 "답했다"로 읽으면 알림이 뜨자마자 사라진다.
     /// 3. **idle → busy 전이** — 새 작업이 시작됐다. busy → idle 은 아니다: 권한 프롬프트가
     ///    뜨는 동안 세션이 idle 로 넘어가는 게 정상이라 그걸로 지우면 알림이 바로 사라진다.
     /// 4. 세션 소멸 (틱 끝 프루닝)
@@ -378,7 +388,8 @@ public final class StateCollector: @unchecked Sendable {
             clearAlert(session.id)
             return nil
         }
-        if let modified = transcript?.modified, modified > alert.since {
+        if let modified = transcript?.modified,
+           modified > alert.since.addingTimeInterval(alertClearGrace) {
             clearAlert(session.id)
             return nil
         }
