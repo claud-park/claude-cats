@@ -8,7 +8,7 @@
 입력 규약은 README 의 "직접 그린 SVG 넣는 법" 절 참고. 요약:
   - viewBox 필수. 그림은 64×64 박스에 균일 스케일로 맞춘다.
   - `<g id="tail-a">`, `<g id="tail-b">` 는 꼬리 프레임, 나머지는 전부 body.
-  - `#FUR`, `#FURDARK` 는 런타임 팔레트 플레이스홀더.
+  - `#FUR`, `#FURDARK`, `#FURLIGHT` 는 런타임 팔레트 플레이스홀더.
   - 좌표는 여기서 AppKit 좌표(y 위로)로 뒤집어 내보낸다. 런타임은 그대로 쓴다.
 """
 
@@ -24,14 +24,15 @@ BOX = 64.0
 
 FUR = ("fur",)
 FUR_DARK = ("furDark",)
+FUR_LIGHT = ("furLight",)
 
 SHAPE_TAGS = {"path", "ellipse", "circle", "rect", "line", "polygon", "polyline"}
 IGNORED_TAGS = {"title", "desc", "metadata"}
 
 # 상속되는 표현 속성. transform 은 따로 합성한다.
 INHERITED = (
-    "fill", "stroke", "stroke-width", "stroke-linecap",
-    "fill-opacity", "stroke-opacity",
+    "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+    "fill-opacity", "stroke-opacity", "fill-rule",
 )
 
 NAMED_COLORS = {
@@ -85,10 +86,12 @@ def parse_color(text):
         return FUR
     if low == "#furdark":
         return FUR_DARK
+    if low == "#furlight":
+        return FUR_LIGHT
     if low in NAMED_COLORS:
         s = NAMED_COLORS[low]
     if not s.startswith("#"):
-        fail("지원하지 않는 색 표기: %r (16진수 또는 #FUR/#FURDARK 만 지원)" % text)
+        fail("지원하지 않는 색 표기: %r (16진수 또는 #FUR/#FURDARK/#FURLIGHT 만 지원)" % text)
     digits = s[1:]
     if len(digits) in (3, 4):
         digits = "".join(c * 2 for c in digits)
@@ -498,9 +501,13 @@ class Layer:
     line_width: float = 0.0
     line_cap: str = "butt"
     opacity: float = 1.0
+    fill_rule: str = "nonzero"
+    line_join: str = "round"
 
     def style_key(self):
-        return (self.fill, self.stroke, round(self.line_width, 6), self.line_cap, round(self.opacity, 6))
+        # fill_rule 이 다르면 절대 합치지 않는다 — 합치면 구멍이 생기거나 메워진다.
+        return (self.fill, self.stroke, round(self.line_width, 6), self.line_cap,
+                round(self.opacity, 6), self.fill_rule, self.line_join)
 
 
 def number_attr(element, name, default=None):
@@ -564,6 +571,13 @@ def make_layers(cmds, style, matrix):
     line_cap = (style.get("stroke-linecap") or "butt").lower()
     if line_cap not in ("butt", "round", "square"):
         fail("지원하지 않는 stroke-linecap: %s" % line_cap)
+    # CAShapeLayer 기본값이 miter 라도 우리 아트는 round 가 기본이다(예전 런타임 동작 유지).
+    line_join = (style.get("stroke-linejoin") or "round").lower()
+    if line_join not in ("miter", "round", "bevel"):
+        fail("지원하지 않는 stroke-linejoin: %s" % line_join)
+    fill_rule = (style.get("fill-rule") or "nonzero").lower()
+    if fill_rule not in ("nonzero", "evenodd"):
+        fail("지원하지 않는 fill-rule: %s" % fill_rule)
 
     def fold(paint, alpha):
         """(페인트, 레이어 불투명도 배수) — 고정색이면 알파에 접고, 플레이스홀더면 레이어로 뺀다."""
@@ -579,11 +593,14 @@ def make_layers(cmds, style, matrix):
     if fill_paint is not None and stroke_paint is not None and abs(fill_mul - stroke_mul) > 1e-9:
         # 팔레트 플레이스홀더에 fill-opacity/stroke-opacity 가 서로 다르게 걸린 경우만.
         return [
-            Layer(list(cmds), fill_paint, None, 0.0, line_cap, base_opacity * fill_mul),
-            Layer(list(cmds), None, stroke_paint, line_width, line_cap, base_opacity * stroke_mul),
+            Layer(list(cmds), fill_paint, None, 0.0, line_cap,
+                  base_opacity * fill_mul, fill_rule, line_join),
+            Layer(list(cmds), None, stroke_paint, line_width, line_cap,
+                  base_opacity * stroke_mul, fill_rule, line_join),
         ]
     multiplier = fill_mul if fill_paint is not None else stroke_mul
-    return [Layer(list(cmds), fill_paint, stroke_paint, line_width, line_cap, base_opacity * multiplier)]
+    return [Layer(list(cmds), fill_paint, stroke_paint, line_width, line_cap,
+                  base_opacity * multiplier, fill_rule, line_join)]
 
 
 # ---------------------------------------------------------------- SVG 순회
@@ -643,6 +660,77 @@ def shape_commands(element):
     fail("지원하지 않는 SVG 요소: <%s>" % name)
 
 
+def _cubic_bounds(p0, p1, p2, p3):
+    """3차 베지어 한 축의 [min, max] — 제어점 껍데기가 아니라 실제 극값."""
+    lo, hi = min(p0, p3), max(p0, p3)
+    a = -p0 + 3.0 * p1 - 3.0 * p2 + p3
+    b = 2.0 * (p0 - 2.0 * p1 + p2)
+    c = p1 - p0
+    roots = []
+    if abs(a) < 1e-12:
+        if abs(b) > 1e-12:
+            roots.append(-c / b)
+    else:
+        disc = b * b - 4.0 * a * c
+        if disc >= 0.0:
+            root = math.sqrt(disc)
+            roots.extend([(-b + root) / (2.0 * a), (-b - root) / (2.0 * a)])
+    for t in roots:
+        if 0.0 < t < 1.0:
+            u = 1.0 - t
+            value = (u * u * u * p0 + 3.0 * u * u * t * p1
+                     + 3.0 * u * t * t * p2 + t * t * t * p3)
+            lo, hi = min(lo, value), max(hi, value)
+    return lo, hi
+
+
+def commands_bounds(cmds):
+    """명령 리스트 → (minX, minY, maxX, maxY). 곡선은 극값까지 포함한다. 선 두께는 무시."""
+    box = [None, None, None, None]
+
+    def add(x, y):
+        if box[0] is None:
+            box[0], box[1], box[2], box[3] = x, y, x, y
+        else:
+            box[0], box[1] = min(box[0], x), min(box[1], y)
+            box[2], box[3] = max(box[2], x), max(box[3], y)
+
+    cx = cy = 0.0
+    sx = sy = 0.0          # 서브패스 시작점 — Z 는 여기로 되돌아간다
+    for cmd in cmds:
+        head = cmd[0]
+        if head == "Z":
+            cx, cy = sx, sy
+        elif head in ("M", "L"):
+            cx, cy = cmd[1], cmd[2]
+            if head == "M":
+                sx, sy = cx, cy
+            add(cx, cy)
+        elif head == "C":
+            x_lo, x_hi = _cubic_bounds(cx, cmd[1], cmd[3], cmd[5])
+            y_lo, y_hi = _cubic_bounds(cy, cmd[2], cmd[4], cmd[6])
+            add(x_lo, y_lo)
+            add(x_hi, y_hi)
+            cx, cy = cmd[5], cmd[6]
+    if box[0] is None:
+        return None
+    return tuple(box)
+
+
+def layers_bounds(layers):
+    """[Layer] → (minX, minY, maxX, maxY) 또는 None."""
+    box = None
+    for layer in layers:
+        one = commands_bounds(layer.cmds)
+        if one is None:
+            continue
+        box = one if box is None else (
+            min(box[0], one[0]), min(box[1], one[1]),
+            max(box[2], one[2]), max(box[3], one[3]),
+        )
+    return box
+
+
 def transform_commands(cmds, matrix):
     out = []
     for cmd in cmds:
@@ -654,7 +742,8 @@ def transform_commands(cmds, matrix):
     return out
 
 
-def walk(element, style, matrix, buckets, bucket):
+def walk(element, style, matrix, buckets, bucket, order=None):
+    """order 가 주어지면 도형이 나온 순서대로 버킷 이름을 기록한다(꼬리 z 순서 판정용)."""
     for child in element:
         name = local_name(child.tag)
         if name in IGNORED_TAGS:
@@ -674,10 +763,13 @@ def walk(element, style, matrix, buckets, bucket):
                 child_bucket = "tailB"
             elif group_id == "body":
                 child_bucket = "body"
-            walk(child, child_style, child_matrix, buckets, child_bucket)
+            walk(child, child_style, child_matrix, buckets, child_bucket, order)
         elif name in SHAPE_TAGS:
             cmds = transform_commands(shape_commands(child), child_matrix)
-            buckets.setdefault(bucket, []).extend(make_layers(cmds, child_style, child_matrix))
+            layers = make_layers(cmds, child_style, child_matrix)
+            buckets.setdefault(bucket, []).extend(layers)
+            if order is not None and layers:
+                order.append(bucket)
         else:
             fail("지원하지 않는 SVG 요소: <%s> (그라디언트·필터·텍스트·이미지 등은 변환할 수 없다)" % name)
 
@@ -706,8 +798,13 @@ def base_matrix(view_box):
     return mat_mul(flip, fit)
 
 
-def parse_svg(text):
-    """SVG 문자열 → {'body'|'tailA'|'tailB': [Layer]} (좌표는 이미 AppKit 방향)."""
+def parse_svg(text, want_order=False):
+    """SVG 문자열 → {'body'|'tailA'|'tailB': [Layer]} (좌표는 이미 AppKit 방향).
+
+    want_order=True 면 (그룹, tail_above_body) 를 돌려준다. tail_above_body 는
+    `tail-a` 의 첫 도형이 `body` 의 마지막 도형보다 뒤에 나왔는지 — 즉 꼬리를 몸통
+    **위**에 얹어야 하는지다.
+    """
     try:
         root = ET.fromstring(text)
     except ET.ParseError as error:
@@ -723,15 +820,25 @@ def parse_svg(text):
              "viewBox 로 옮기거나 내보내기 전에 flatten 해야 한다." % root.get("transform"))
 
     buckets = {}
-    walk(root, {}, base_matrix(root.get("viewBox")), buckets, "body")
-    return {name: merge_layers(layers) for name, layers in buckets.items() if layers}
+    order = []
+    walk(root, {}, base_matrix(root.get("viewBox")), buckets, "body", order)
+    groups = {name: merge_layers(layers) for name, layers in buckets.items() if layers}
+    if not want_order:
+        return groups
+    tail_above = False
+    if "tailA" in order and "body" in order:
+        tail_above = order.index("tailA") > len(order) - 1 - order[::-1].index("body")
+    return groups, tail_above
 
 
 # ---------------------------------------------------------------- Swift 생성
 
 
-def num(value):
-    text = "%.4f" % (value + 0.0)
+def num(value, places=2):
+    """숫자 → Swift 리터럴. 기본 소수 2자리 — 64pt 상자에서 0.01pt 는 2x 화면의 0.02px 다.
+    자릿수를 줄이면 생성 파일이 작아지고 컴파일이 빨라진다. 임포터는 places=4 로 쓴다
+    (fit 변환의 scale 을 반올림하면 바닥 정렬이 어긋난다)."""
+    text = ("%." + str(places) + "f") % (value + 0.0)
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return "0" if text in ("", "-0") else text
@@ -744,6 +851,8 @@ def swift_color(paint):
         return ".fur"
     if paint[0] == "furDark":
         return ".furDark"
+    if paint[0] == "furLight":
+        return ".furLight"
     return ".fixed(r: %s, g: %s, b: %s, a: %s)" % tuple(num(v) for v in paint[1:])
 
 
@@ -779,6 +888,8 @@ def swift_layers(name, layers):
         out.append("            stroke: %s," % swift_color(layer.stroke))
         out.append("            lineWidth: %s," % num(layer.line_width))
         out.append("            lineCap: .%s," % layer.line_cap)
+        out.append("            lineJoin: .%s," % layer.line_join)
+        out.append("            fillRule: .%s," % ("evenOdd" if layer.fill_rule == "evenodd" else "nonZero"))
         out.append("            opacity: %s" % num(layer.opacity))
         out.append("        ),")
     out.append("    ]")
@@ -790,10 +901,11 @@ HEADER = """// GENERATED — edit Design/cats/*.svg and run scripts/generate-cat
 import CoreGraphics
 import QuartzCore
 
-/// SVG 의 `#FUR`/`#FURDARK` 플레이스홀더는 런타임 팔레트에서 색을 받는다.
+/// SVG 의 `#FUR`/`#FURDARK`/`#FURLIGHT` 플레이스홀더는 런타임 팔레트에서 색을 받는다.
 enum CatArtColor: Equatable, Sendable {
     case fur
     case furDark
+    case furLight
     case fixed(r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat)
 }
 
@@ -804,6 +916,8 @@ struct CatArtLayer: @unchecked Sendable {
     let stroke: CatArtColor?
     let lineWidth: CGFloat
     let lineCap: CAShapeLayerLineCap
+    let lineJoin: CAShapeLayerLineJoin
+    let fillRule: CAShapeLayerFillRule
     let opacity: Float
 }
 
@@ -820,18 +934,29 @@ def camel(text):
 
 def convert_files(paths):
     sections = []
+    scalars = []
     for path in paths:
         with open(path, encoding="utf-8") as handle:
-            groups = parse_svg(handle.read())
+            groups, tail_above = parse_svg(handle.read(), want_order=True)
         stem = camel(os.path.splitext(os.path.basename(path))[0])
         for bucket in ("body", "tailA", "tailB"):
             if bucket in groups:
                 suffix = bucket[0].upper() + bucket[1:]
                 sections.append((stem + suffix, groups[bucket]))
+        box = layers_bounds([layer for layers in groups.values() for layer in layers])
+        scalars.append(
+            "    /// 말풍선을 얹을 그림 꼭대기(AppKit y). 선 두께는 빼고 경로 bbox 만 본다.\n"
+            "    static let %sTop: CGFloat = %s" % (stem, num(box[3] if box else BOX))
+        )
+        if "tailA" in groups:
+            scalars.append(
+                "    /// 원본 SVG 에서 꼬리가 몸통 뒤에 오면 false — 런타임이 그릇 레이어 순서를 맞춘다.\n"
+                "    static let %sTailAboveBody: Bool = %s" % (stem, "true" if tail_above else "false")
+            )
     if not sections:
         fail("변환할 도형이 없다")
     body = "\n\n".join(swift_layers(name, layers) for name, layers in sections)
-    return HEADER + "\n" + body + "\n}\n"
+    return HEADER + "\n" + "\n\n".join(scalars) + "\n\n" + body + "\n}\n"
 
 
 def main(argv):
