@@ -31,6 +31,11 @@ private final class PowerSourceGate: @unchecked Sendable {
         last = onBattery
         return true
     }
+
+    /// 기억을 비워 다음 틱을 무조건 통과시킨다. collector 큐에서만 호출할 것.
+    func reset() {
+        last = nil
+    }
 }
 
 /// 폴링 타이머를 돌리고 Snapshot → Layout → 창 반영을 잇는다.
@@ -99,6 +104,10 @@ final class AppController {
                 MainActor.assumeIsolated { self?.handle(snapshot) }
             }
         }
+        // 타이머가 없던 동안(슬립·잠금·일시정지) PowerMonitor 가 refreshPowerSource 로
+        // 전원을 직접 고쳐 쓸 수 있다 — 게이트는 그걸 모른다. 비워두면 새 타이머의
+        // 첫 틱이 무조건 권위 있는 보고가 되어, 게이트가 진짜 변화를 삼키는 일이 없다.
+        queue.async { @Sendable [powerGate] in powerGate.reset() }
         source.resume()
         timer = source
         pollNow()

@@ -24,17 +24,26 @@ final class StatusMenu: NSObject {
         item.button?.image = image
 
         let menu = NSMenu()
-        summaryItem.isEnabled = false
+        // 기본값(true)이면 AppKit 이 매번 활성 상태를 다시 계산해 summaryItem 의
+        // isEnabled = false 를 덮어쓴다. 직접 관리한다.
+        menu.autoenablesItems = false
+
+        let refresh = NSMenuItem(title: "지금 새로고침", action: #selector(self.refresh), keyEquivalent: "r")
+        let quit = NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        summaryItem.isEnabled = false                                  // 읽기 전용 요약 줄
+        for entry in [pauseItem, refresh, loginItem, quit] { entry.isEnabled = true }
+        for entry in [pauseItem, refresh, loginItem] { entry.target = self }
+        // quit 은 target 없이 응답 체인을 타고 NSApp.terminate 로 간다.
+
         menu.addItem(summaryItem)
         menu.addItem(.separator())
         menu.addItem(pauseItem)
-        let refresh = NSMenuItem(title: "지금 새로고침", action: #selector(self.refresh), keyEquivalent: "r")
         menu.addItem(refresh)
         menu.addItem(.separator())
         menu.addItem(loginItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        for entry in [pauseItem, refresh, loginItem] { entry.target = self }
+        menu.addItem(quit)
         item.menu = menu
         updateLoginState()
     }
