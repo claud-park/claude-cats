@@ -96,4 +96,61 @@ import Foundation
     @Test func encodeCwdReplacesSlashAndUnderscore() {
         #expect(StateCollector.encodeCwd("/Users/me/Documents/flo/_obsidian") == "-Users-me-Documents-flo--obsidian")
     }
+
+    @Test func nonInteractiveFileNotReparsedWhenMtimeUnchanged() {
+        let fs = FakeFileSystem()
+        let path = Fixtures.sessionPath(pid: 10)
+        fs.add(path, Fixtures.sessionJSON(pid: 10, id: "s1", name: "a", cwd: "/p", kind: "background"), modified: now)
+        fs.alivePids = [10]
+        let c = makeCollector(fs)
+        #expect(c.collect(now: now).sessions.isEmpty)
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions.isEmpty)
+        #expect(fs.readCount[path] == 1)
+
+        fs.add(path, Fixtures.sessionJSON(pid: 10, id: "s1", name: "a", cwd: "/p", kind: "interactive"), modified: now.addingTimeInterval(5))
+        let snap = c.collect(now: now.addingTimeInterval(6))
+        #expect(fs.readCount[path] == 2)
+        #expect(snap.sessions.count == 1)
+    }
+
+    @Test func brokenJsonNotReparsedWhenMtimeUnchanged() {
+        let fs = FakeFileSystem()
+        let path = Fixtures.sessionPath(pid: 10)
+        fs.add(path, "{not json", modified: now)
+        fs.alivePids = [10]
+        let c = makeCollector(fs)
+        #expect(c.collect(now: now).sessions.isEmpty)
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions.isEmpty)
+        #expect(fs.readCount[path] == 1)
+
+        fs.add(path, Fixtures.sessionJSON(pid: 10, id: "s1", name: "a", cwd: "/p"), modified: now.addingTimeInterval(5))
+        let snap = c.collect(now: now.addingTimeInterval(6))
+        #expect(fs.readCount[path] == 2)
+        #expect(snap.sessions.count == 1)
+    }
+
+    @Test func sessionCacheSurvivesTransientListFailure() {
+        let fs = FakeFileSystem()
+        let path = Fixtures.sessionPath(pid: 10)
+        fs.add(path, Fixtures.sessionJSON(pid: 10, id: "s1", name: "a", cwd: "/p"), modified: now)
+        fs.alivePids = [10]
+        let c = makeCollector(fs)
+        #expect(c.collect(now: now).sessions.count == 1)
+
+        fs.remove(path)
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions.isEmpty)
+
+        fs.add(path, Fixtures.sessionJSON(pid: 10, id: "s1", name: "a", cwd: "/p"), modified: now)
+        let snap = c.collect(now: now.addingTimeInterval(6))
+        #expect(snap.sessions.count == 1)
+        #expect(fs.readCount[path] == 1)
+    }
+
+    @Test func sortTiebreaksOnIdForEqualNames() {
+        let fs = FakeFileSystem()
+        fs.add(Fixtures.sessionPath(pid: 10), Fixtures.sessionJSON(pid: 10, id: "b", name: "same", cwd: "/p"), modified: now)
+        fs.add(Fixtures.sessionPath(pid: 11), Fixtures.sessionJSON(pid: 11, id: "a", name: "same", cwd: "/p"), modified: now)
+        fs.alivePids = [10, 11]
+        #expect(makeCollector(fs).collect(now: now).sessions.map(\.id) == ["a", "b"])
+    }
 }

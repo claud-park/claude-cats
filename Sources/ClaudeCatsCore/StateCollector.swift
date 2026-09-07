@@ -11,8 +11,8 @@ public final class StateCollector: @unchecked Sendable {
     private let claudeDir: URL
     private let log = Logger(subsystem: "claude-cats", category: "collector")
 
-    /// key: sessions/<pid>.json 경로
-    private var sessionCache: [String: (modified: Date, session: Session)] = [:]
+    /// key: sessions/<pid>.json 경로. session 이 nil 이면 파싱 실패(비대화형/깨진 JSON)의 부정 캐시.
+    private var sessionCache: [String: (modified: Date, session: Session?)] = [:]
     /// key: sessionId. url 이 nil 이면 실패 캐시(checkedAt + projectLookupRetry 후 재시도).
     private var projectDirCache: [String: (url: URL?, checkedAt: Date)] = [:]
     /// key: meta.json 경로 → description
@@ -25,7 +25,10 @@ public final class StateCollector: @unchecked Sendable {
 
     public func collect(now: Date) -> Snapshot {
         let sessionsDir = claudeDir.appendingPathComponent("sessions")
-        let files = (try? fs.list(sessionsDir)) ?? []
+        guard let files = try? fs.list(sessionsDir) else {
+            // 목록 조회 실패(일시적 오류 포함)는 캐시를 건드리지 않고 빈 스냅샷만 반환한다.
+            return Snapshot(sessions: [], takenAt: now)
+        }
         var sessions: [Session] = []
         var seenPaths = Set<String>()
         var seenIds = Set<String>()
@@ -36,14 +39,16 @@ public final class StateCollector: @unchecked Sendable {
 
             var session: Session
             if let cached = sessionCache[file.path], cached.modified == st.modified {
-                session = cached.session
+                guard let cachedSession = cached.session else { continue }
+                session = cachedSession
             } else {
                 guard let data = try? fs.read(file) else {
                     log.warning("read failed: \(file.path, privacy: .public)")
                     continue
                 }
                 guard let parsed = Self.parseSession(data) else {
-                    log.debug("skipped session file: \(file.path, privacy: .public)")
+                    log.info("skipped session file: \(file.path, privacy: .public)")
+                    sessionCache[file.path] = (st.modified, nil)
                     continue
                 }
                 session = parsed
@@ -59,7 +64,7 @@ public final class StateCollector: @unchecked Sendable {
         }
 
         sessionCache = sessionCache.filter { seenPaths.contains($0.key) }
-        sessions.sort { $0.name < $1.name }
+        sessions.sort { ($0.name, $0.id) < ($1.name, $1.id) }
         return Snapshot(sessions: sessions, takenAt: now)
     }
 
