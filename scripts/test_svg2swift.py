@@ -165,6 +165,35 @@ class FailureTests(unittest.TestCase):
         svg = wrap('<path d="M0 0 L1 1" fill="#FUR" clip-path="none"/>')
         self.assertEqual(len(S.parse_svg(svg)["body"]), 1)
 
+    def test_root_clip_path_aborts(self):
+        """walk() 는 자식만 본다 — 루트 <svg> 의 clip-path 도 막아야 한다."""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" clip-path="url(#c)">'
+               '<path d="M0 0 L1 1" fill="#FUR"/></svg>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("clip-path", str(ctx.exception))
+        self.assertIn("svg", str(ctx.exception))
+
+    def test_root_mask_in_inline_style_aborts(self):
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" style="mask:url(#m)">'
+               '<path d="M0 0 L1 1" fill="#FUR"/></svg>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("mask", str(ctx.exception))
+
+    def test_root_transform_aborts(self):
+        """루트 transform 은 조용히 무시됐다. 적용하는 대신 이름을 찍고 중단한다."""
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" transform="translate(10,0)">'
+               '<path d="M0 0 L1 1" fill="#FUR"/></svg>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("transform", str(ctx.exception))
+        self.assertIn("svg", str(ctx.exception))
+
+    def test_root_without_transform_is_fine(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR"/>')
+        self.assertEqual(len(S.parse_svg(svg)["body"]), 1)
+
     def test_gradient_inside_defs_aborts(self):
         svg = wrap('<defs><linearGradient id="g"/></defs>')
         with self.assertRaises(SystemExit) as ctx:

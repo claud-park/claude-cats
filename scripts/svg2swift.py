@@ -715,6 +715,13 @@ def parse_svg(text):
     if local_name(root.tag) != "svg":
         fail("루트 요소가 <svg> 가 아니다: <%s>" % local_name(root.tag))
 
+    # walk() 는 자식만 검사한다. 루트 <svg> 의 속성은 아무도 안 보고 지나가므로
+    # 여기서 직접 막는다 — 조용히 무시하면 그림이 달라진다.
+    check_unsupported_attrs(root, "svg")
+    if (root.get("transform") or "").strip():
+        fail('루트 <svg> 의 transform 은 변환할 수 없다 (transform=%r). '
+             "viewBox 로 옮기거나 내보내기 전에 flatten 해야 한다." % root.get("transform"))
+
     buckets = {}
     walk(root, {}, base_matrix(root.get("viewBox")), buckets, "body")
     return {name: merge_layers(layers) for name, layers in buckets.items() if layers}
