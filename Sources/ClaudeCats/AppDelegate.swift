@@ -3,6 +3,9 @@ import ClaudeCatsCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// 고양이를 그릴 디스플레이 이름. 키가 없으면 자동(메인).
+    private static let preferredDisplayKey = "preferredDisplayName"
+
     private var window: DesktopWindow!
     private var controller: AppController!
     private var power: PowerMonitor!
@@ -14,7 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fileSystem: RealFileSystem(),
             claudeDir: home.appendingPathComponent(".claude")
         )
-        window = DesktopWindow()
+        let defaults = UserDefaults.standard
+        let preferredDisplay = defaults.string(forKey: Self.preferredDisplayKey)
+        // 첫 렌더 전에 화면을 정해야 Scene 이 그 화면 크기로 배치된다.
+        window = DesktopWindow(preferredDisplayName: preferredDisplay)
         controller = AppController(collector: collector, window: window)
 
         NotificationCenter.default.addObserver(
@@ -26,8 +32,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu = StatusMenu(
             onPauseToggle: { [weak self] paused in self?.power.setPaused(paused) },
-            onRefresh: { [weak self] in self?.controller.pollNow() }
+            onRefresh: { [weak self] in self?.controller.pollNow() },
+            onDisplaySelect: { [weak self] name in
+                guard let self else { return }
+                if let name {
+                    defaults.set(name, forKey: Self.preferredDisplayKey)
+                } else {
+                    defaults.removeObject(forKey: Self.preferredDisplayKey)
+                }
+                self.window.setPreferredDisplay(name)
+                self.menu.setPreferredDisplayName(name)
+                // 화면 크기가 달라졌을 수 있으니 배치를 다시 계산한다.
+                self.controller.screenChanged()
+            }
         )
+        menu.setPreferredDisplayName(preferredDisplay)
         controller.onSnapshot = { [weak self] snapshot in self?.menu.update(with: snapshot) }
 
         power = PowerMonitor()

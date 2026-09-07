@@ -23,12 +23,29 @@ final class DesktopWindow {
     private var tailTimer: DispatchSourceTimer?
     private var isRefitting = false
 
-    /// 스펙의 "메인 디스플레이" = 원점을 포함한 주 디스플레이(`screens.first`).
-    /// `NSScreen.main` 은 키보드 포커스가 있는 화면이라 다르다 — 포커스 따라 고양이가 옮겨다닌다.
-    private static var mainDisplay: NSScreen? { NSScreen.screens.first ?? NSScreen.main }
+    /// 사용자가 메뉴에서 고른 디스플레이 이름. nil 이면 메인 디스플레이(자동).
+    private var preferredDisplayName: String?
 
-    init() {
-        let screen = Self.mainDisplay
+    /// 선택한 이름의 디스플레이. 이름이 안 맞거나(뽑아버린 모니터) 없으면 메인으로 폴백한다.
+    /// 저장 프로퍼티가 다 차기 전(init)에도 불러야 해서 static 이다.
+    private static func targetScreen(preferredDisplayName: String?) -> NSScreen? {
+        let screens = NSScreen.screens
+        let fallback = screens.first ?? NSScreen.main
+        guard let resolved = DisplaySelection.resolve(
+            preferredName: preferredDisplayName,
+            available: DisplayCatalog.current()
+        ) else { return fallback }
+        // 이름이 겹치면 resolve 와 같이 첫 번째를 쓴다.
+        return screens.first { $0.localizedName == resolved.name } ?? fallback
+    }
+
+    private func targetScreen() -> NSScreen? {
+        Self.targetScreen(preferredDisplayName: preferredDisplayName)
+    }
+
+    init(preferredDisplayName: String? = nil) {
+        self.preferredDisplayName = preferredDisplayName
+        let screen = Self.targetScreen(preferredDisplayName: preferredDisplayName)
         let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let scale = screen?.backingScaleFactor ?? 2
 
@@ -54,13 +71,22 @@ final class DesktopWindow {
 
     var screenSize: CGSize { window.frame.size }
 
+    /// 메뉴에서 디스플레이를 고르면 호출된다. nil = 자동(메인).
+    func setPreferredDisplay(_ name: String?) {
+        preferredDisplayName = name
+        refitToScreen()
+    }
+
     func refitToScreen() {
         // setFrame 이 viewDidChangeBackingProperties 를 다시 부를 수 있어 재진입을 막는다.
-        guard !isRefitting, let screen = Self.mainDisplay else { return }
+        guard !isRefitting, let screen = targetScreen() else { return }
         isRefitting = true
         defer { isRefitting = false }
 
+        // 보조 디스플레이는 frame.origin 이 0 이 아니다. 창은 전역 좌표로 옮기고,
+        // 콘텐츠 뷰는 창 좌표계의 원점에 그대로 둔다 — Scene·말풍선 계산은 영향받지 않는다.
         window.setFrame(screen.frame, display: true)
+        contentView.frame = NSRect(origin: .zero, size: screen.frame.size)
         let scale = screen.backingScaleFactor
         rootLayer.contentsScale = scale
         // 이미 만들어진 고양이들은 생성 시점 스케일을 들고 있으므로 같이 내려준다.

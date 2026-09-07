@@ -2,20 +2,29 @@ import AppKit
 import ClaudeCatsCore
 import ServiceManagement
 
-/// 메뉴바 아이콘과 메뉴. 요약 · 일시정지 · 새로고침 · 로그인 시 시작 · 종료.
+/// 메뉴바 아이콘과 메뉴. 요약 · 일시정지 · 새로고침 · 디스플레이 · 로그인 시 시작 · 종료.
 @MainActor
 final class StatusMenu: NSObject {
     private let item: NSStatusItem
     private let summaryItem = NSMenuItem(title: "고양이 0마리", action: nil, keyEquivalent: "")
     private let pauseItem = NSMenuItem(title: "일시정지", action: #selector(togglePause), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "로그인 시 시작", action: #selector(toggleLogin), keyEquivalent: "")
+    private let displayItem = NSMenuItem(title: "디스플레이", action: nil, keyEquivalent: "")
+    private let displayMenu = NSMenu()
     private let onPauseToggle: (Bool) -> Void
     private let onRefresh: () -> Void
+    private let onDisplaySelect: (String?) -> Void
     private var paused = false
+    private var preferredDisplayName: String?
 
-    init(onPauseToggle: @escaping (Bool) -> Void, onRefresh: @escaping () -> Void) {
+    init(
+        onPauseToggle: @escaping (Bool) -> Void,
+        onRefresh: @escaping () -> Void,
+        onDisplaySelect: @escaping (String?) -> Void
+    ) {
         self.onPauseToggle = onPauseToggle
         self.onRefresh = onRefresh
+        self.onDisplaySelect = onDisplaySelect
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -37,20 +46,55 @@ final class StatusMenu: NSObject {
         let quit = NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         summaryItem.isEnabled = false                                  // 읽기 전용 요약 줄
-        for entry in [pauseItem, refresh, loginItem, quit] { entry.isEnabled = true }
+        for entry in [pauseItem, refresh, loginItem, quit, displayItem] { entry.isEnabled = true }
         for entry in [pauseItem, refresh, loginItem] { entry.target = self }
         // quit 은 target 없이 응답 체인을 타고 NSApp.terminate 로 간다.
+
+        // 하위 메뉴는 열릴 때마다 menuNeedsUpdate 에서 다시 만든다(모니터가 꽂혔다 빠진다).
+        displayMenu.autoenablesItems = false
+        displayMenu.delegate = self
+        displayItem.submenu = displayMenu
 
         menu.addItem(summaryItem)
         menu.addItem(.separator())
         menu.addItem(pauseItem)
         menu.addItem(refresh)
+        menu.addItem(displayItem)
         menu.addItem(.separator())
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(quit)
         item.menu = menu
         updateLoginState()
+        rebuildDisplayMenu()
+    }
+
+    /// 현재 선택(자동 = nil)을 알려준다. 메뉴 체크 표시에만 쓴다.
+    func setPreferredDisplayName(_ name: String?) {
+        preferredDisplayName = name
+        rebuildDisplayMenu()
+    }
+
+    private func rebuildDisplayMenu() {
+        displayMenu.removeAllItems()
+        for entry in DisplaySelection.menuEntries(
+            preferredName: preferredDisplayName,
+            available: DisplayCatalog.current()
+        ) {
+            let menuItem = NSMenuItem(title: entry.title, action: #selector(selectDisplay(_:)), keyEquivalent: "")
+            menuItem.target = self
+            menuItem.isEnabled = true
+            menuItem.state = entry.isSelected ? .on : .off
+            menuItem.representedObject = entry.name   // 자동은 nil
+            displayMenu.addItem(menuItem)
+        }
+    }
+
+    @objc private func selectDisplay(_ sender: NSMenuItem) {
+        let name = sender.representedObject as? String
+        preferredDisplayName = name
+        rebuildDisplayMenu()
+        onDisplaySelect(name)
     }
 
     func update(with snapshot: Snapshot) {
@@ -86,5 +130,13 @@ final class StatusMenu: NSObject {
 
     private func updateLoginState() {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+}
+
+extension StatusMenu: NSMenuDelegate {
+    /// 하위 메뉴가 열리기 직전. 지금 붙어 있는 디스플레이로 목록을 다시 만든다.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === displayMenu else { return }
+        rebuildDisplayMenu()
     }
 }
