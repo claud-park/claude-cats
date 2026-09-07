@@ -40,12 +40,23 @@ public enum HookInstaller {
     // MARK: - 설치
 
     /// 없는 이벤트만 채운다(멱등). 같은 command 가 이미 어느 그룹에든 있으면 그 이벤트는 건너뛴다.
+    ///
+    /// **matcher 는 판정에 안 쓴다.** 사용자가 우리 스크립트를 직접 다른 matcher 로 걸어 뒀거나,
+    /// 예전 버전이 다른 matcher 로 심어 뒀다면 그 항목을 그대로 인정하고 새로 넣지 않는다.
+    /// 같은 command 를 두 번 걸면 이벤트마다 파일이 두 개씩 생겨서(중복 이벤트) 손해만 크다 —
+    /// matcher 가 우리 기본값과 달라 알림을 좀 덜 받는 쪽이 훨씬 낫다. 기본 matcher 로 되돌리려면
+    /// 껐다가 다시 켜면 된다(`remove` 는 matcher 와 무관하게 우리 command 를 전부 걷어낸다).
     public static func install(into settings: [String: Any], command: String) throws -> [String: Any] {
         var result = settings
         var hooks = try hooksTree(settings)
 
         for entry in entries {
             var groups = try groupList(hooks, event: entry.event)
+            // 규격 검사를 먼저 한다 — 못 읽는 그룹이 섞여 있으면 우리 훅이 이미 있는지 알 수
+            // 없고, 그대로 넣으면 조용히 중복이 된다.
+            for (index, group) in groups.enumerated() {
+                _ = try hookList(group, event: entry.event, index: index)
+            }
             if groups.contains(where: { commands(of: $0).contains(command) }) { continue }
             groups.append([
                 "matcher": entry.matcher,

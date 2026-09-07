@@ -8,8 +8,6 @@ import os
 @MainActor
 enum HookSetup {
     private static let log = Logger(subsystem: "claude-cats", category: "hooks")
-    /// 세션당 한 번만 백업한다 — 토글을 여러 번 눌러도 첫 백업(= 우리가 손대기 전 파일)을 지킨다.
-    private static var backedUp = false
 
     // MARK: - 경로
 
@@ -36,15 +34,22 @@ enum HookSetup {
         "'" + scriptURL.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// 앱이 안 떠 있는 동안 훅이 쌓을 수 있는 이벤트 파일 수의 상한. 넘으면 훅이 그냥 쉰다.
+    static let eventBacklogLimit = 5000
+
     /// 훅 스크립트. stdin(JSON 한 덩어리)을 파일 하나로 옮기는 것 말고는 아무것도 안 한다.
     /// 무슨 일이 있어도 exit 0 — Claude 를 붙잡거나 막지 않는다.
     /// 임시 이름으로 받아 같은 디렉터리 안에서 rename 한다: 앱이 반쯤 쓰인 파일을 읽지 않게.
+    /// 앱이 꺼져 있으면 아무도 안 치우므로, 쌓인 게 많으면 쓰지 않고 나간다
+    /// (`find | head` 로 상한 + 1 개까지만 세므로 디렉터리가 아무리 커도 비용이 일정하다).
     static let script = """
     #!/bin/sh
     # Claude Cats: Claude Code 훅 페이로드를 파일 하나로 넘긴다. 절대 Claude 를 막지 않는다.
     # GENERATED — Sources/ClaudeCats/HookSetup.swift 가 쓴다. 손으로 고치지 말 것.
     d="$HOME/.claude/claude-cats/events"
     mkdir -p "$d" 2>/dev/null || exit 0
+    n=$(find "$d" -maxdepth 1 -name '*.json' 2>/dev/null | head -\(eventBacklogLimit + 1) | wc -l)
+    [ "$n" -gt \(eventBacklogLimit) ] && exit 0
     f="$d/$(date +%s)-$$-$RANDOM"
     cat > "$f.tmp" 2>/dev/null || { rm -f "$f.tmp" 2>/dev/null; exit 0; }
     mv "$f.tmp" "$f.json" 2>/dev/null || rm -f "$f.tmp" 2>/dev/null
@@ -75,8 +80,15 @@ enum HookSetup {
             let updated = install
                 ? try HookInstaller.install(into: settings, command: command)
                 : try HookInstaller.remove(from: settings, command: command)
-            try writeSettings(updated)
-            log.info("hooks \(install ? "installed" : "removed", privacy: .public)")
+            // 끄기인데 파일이 아예 없으면 만들지 않는다 — 훅을 켠 적 없는 사용자에게 `{}` 를
+            // 남길 이유가 없다. 바뀐 게 없어도 쓰지 않는다: 사용자가 손으로 잡아 둔 서식을
+            // 괜히 다시 짜고 백업·mtime 을 건드리게 된다.
+            let exists = FileManager.default.fileExists(atPath: resolvedSettingsURL.path)
+            let changed = try serialized(settings) != serialized(updated)
+            if changed, exists || install {
+                try writeSettings(updated)
+            }
+            log.info("hooks \(install ? "installed" : "removed", privacy: .public) (written: \(changed && (exists || install), privacy: .public))")
             return install
         } catch {
             report(error, installing: install)
@@ -86,31 +98,23 @@ enum HookSetup {
 
     // MARK: - 파일
 
-    /// 없으면 빈 설정으로 본다(첫 쓰기에서 만든다). 있는데 JSON 이 아니면 던진다.
+    /// 심볼릭 링크를 따라간 실제 경로(`SettingsFile` 이 하는 일과 같다 — 존재 확인용).
+    static var resolvedSettingsURL: URL { SettingsFile.resolve(settingsURL) }
+
     private static func readSettings() throws -> [String: Any] {
-        guard FileManager.default.fileExists(atPath: settingsURL.path) else { return [:] }
-        let data = try Data(contentsOf: settingsURL)
-        if data.isEmpty { return [:] }
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw HookInstaller.MalformedSettings(path: "(최상위가 객체가 아니다)")
-        }
-        return object
+        try SettingsFile.read(settingsURL)
     }
 
+    private static func serialized(_ settings: [String: Any]) throws -> Data {
+        try SettingsFile.serialize(settings)
+    }
+
+    /// 백업은 **우리가 손대기 전 원본**이어야 한다. 앱을 다시 켤 때마다 덮어쓰면
+    /// 두 번째 실행에서 "이미 훅이 든 파일"이 백업 자리에 들어가 원본이 사라진다 —
+    /// 그래서 `SettingsFile` 이 백업 자리가 비어 있을 때만 만든다(실행마다가 아니라 딱 한 번).
     private static func writeSettings(_ settings: [String: Any]) throws {
-        if !backedUp, FileManager.default.fileExists(atPath: settingsURL.path) {
-            try? FileManager.default.removeItem(at: backupURL)
-            try FileManager.default.copyItem(at: settingsURL, to: backupURL)
-            backedUp = true
-        }
-        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
-        // 키 순서·들여쓰기는 우리가 다시 짠다(JSONSerialization 은 원본 서식을 못 지킨다).
-        // sortedKeys 라도 붙여야 매번 같은 파일이 나온다 — README 의 "서식" 항목 참고.
-        let data = try JSONSerialization.data(
-            withJSONObject: settings,
-            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        )
-        try (data + Data("\n".utf8)).write(to: settingsURL, options: .atomic)
+        let madeBackup = try SettingsFile.write(settings, to: settingsURL, backupTo: backupURL)
+        if madeBackup { log.info("backed up settings to \(backupURL.path, privacy: .public)") }
     }
 
     private static func writeScript() throws {
@@ -129,6 +133,11 @@ enum HookSetup {
             alert.informativeText = """
             \(settingsURL.path) 의 `\(malformed.path)` 를 알아볼 수 없어 아무것도 고치지 않았습니다.
             그 부분을 고친 뒤 다시 시도해 주세요.
+            """
+        } else if error is SettingsFile.NotAnObject {
+            alert.informativeText = """
+            \(settingsURL.path) 가 JSON 객체가 아니라 아무것도 고치지 않았습니다.
+            파일을 고친 뒤 다시 시도해 주세요.
             """
         } else {
             alert.informativeText = "\(settingsURL.path)\n\(error.localizedDescription)"

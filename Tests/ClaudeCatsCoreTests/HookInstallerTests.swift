@@ -164,6 +164,39 @@ import Foundation
         }
     }
 
+    /// `hooks` 배열 안에 딕셔너리가 아닌 원소가 섞여 있는 경우. 우리가 만지는 이벤트라면
+    /// 설치·제거 둘 다 멈춘다 — 이런 그룹은 우리 훅이 이미 있는지 판정할 수 없고,
+    /// 그냥 넣으면 조용히 중복이 된다.
+    @Test func nonDictionaryElementInsideAHookListThrows() {
+        let broken: [String: Any] = ["hooks": [
+            "Notification": [["matcher": "", "hooks": [["type": "command", "command": "ok.sh"], "표"]]],
+        ]]
+        #expect(throws: HookInstaller.MalformedSettings(path: "hooks.Notification[0].hooks")) {
+            _ = try HookInstaller.install(into: broken, command: command)
+        }
+        #expect(throws: HookInstaller.MalformedSettings(path: "hooks.Notification[0].hooks")) {
+            _ = try HookInstaller.remove(from: broken, command: command)
+        }
+        #expect(HookInstaller.isInstalled(in: broken, command: command) == false)
+    }
+
+    /// 같은 그룹에 우리 command 가 두 번 들어 있어도(손으로 붙여넣기 등) 제거는 둘 다 걷어낸다.
+    @Test func duplicateCommandInOneGroupIsFullyRemoved() throws {
+        let doubled: [String: Any] = ["hooks": [
+            "SubagentStop": [[
+                "matcher": "",
+                "hooks": [["type": "command", "command": command, "timeout": 5],
+                          ["type": "command", "command": command, "timeout": 5]],
+            ]],
+        ]]
+        // 이미 있는 것으로 보고 또 넣지 않는다.
+        let installed = try HookInstaller.install(into: doubled, command: command)
+        #expect(((installed["hooks"] as? [String: Any])?["SubagentStop"] as? [Any])?.count == 1)
+
+        let out = try HookInstaller.remove(from: doubled, command: command)
+        #expect(out["hooks"] == nil)
+    }
+
     /// 우리가 안 건드리는 이벤트가 망가져 있어도 설치는 된다 — 남의 설정을 판정하지 않는다.
     @Test func malformedUnrelatedEventDoesNotBlockInstall() throws {
         let out = try HookInstaller.install(into: ["hooks": ["PreToolUse": "weird"]], command: command)
