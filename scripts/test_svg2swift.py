@@ -141,6 +141,108 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(len(S.parse_svg(svg)["body"]), 2)
 
 
+class FillRuleTests(unittest.TestCase):
+    def test_evenodd_survives(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR" fill-rule="evenodd"/>')
+        self.assertEqual(S.parse_svg(svg)["body"][0].fill_rule, "evenodd")
+
+    def test_default_is_nonzero(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR"/>')
+        self.assertEqual(S.parse_svg(svg)["body"][0].fill_rule, "nonzero")
+
+    def test_inherited_from_group(self):
+        svg = wrap('<g fill-rule="evenodd"><path d="M0 0 L1 1" fill="#FUR"/></g>')
+        self.assertEqual(S.parse_svg(svg)["body"][0].fill_rule, "evenodd")
+
+    def test_different_fill_rules_never_merge(self):
+        """같은 색이어도 채우기 규칙이 다르면 합치면 안 된다 — 구멍이 메워진다."""
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR" fill-rule="evenodd"/>'
+                   '<path d="M2 2 L3 3" fill="#FUR"/>')
+        layers = S.parse_svg(svg)["body"]
+        self.assertEqual(len(layers), 2)
+        self.assertEqual([layer.fill_rule for layer in layers], ["evenodd", "nonzero"])
+
+    def test_swift_emits_fill_rule(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR" fill-rule="evenodd"/>')
+        layers = S.parse_svg(svg)["body"]
+        self.assertIn("fillRule: .evenOdd", S.swift_layers("x", layers))
+
+    def test_unknown_fill_rule_aborts(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR" fill-rule="wat"/>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("fill-rule", str(ctx.exception))
+
+
+class LineJoinTests(unittest.TestCase):
+    def test_default_is_round(self):
+        svg = wrap('<path d="M0 0 L4 0" stroke="#FUR"/>')
+        self.assertEqual(S.parse_svg(svg)["body"][0].line_join, "round")
+
+    def test_explicit_bevel(self):
+        svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-linejoin="bevel"/>')
+        layers = S.parse_svg(svg)["body"]
+        self.assertEqual(layers[0].line_join, "bevel")
+        self.assertIn("lineJoin: .bevel", S.swift_layers("x", layers))
+
+    def test_different_line_joins_do_not_merge(self):
+        svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-linejoin="miter"/>'
+                   '<path d="M0 4 L4 4" stroke="#FUR"/>')
+        self.assertEqual(len(S.parse_svg(svg)["body"]), 2)
+
+    def test_unknown_line_join_aborts(self):
+        svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-linejoin="wat"/>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("stroke-linejoin", str(ctx.exception))
+
+
+class FurLightTests(unittest.TestCase):
+    def test_placeholder(self):
+        self.assertEqual(S.parse_color("#FURLIGHT"), S.FUR_LIGHT)
+        self.assertEqual(S.parse_color("#furlight"), S.FUR_LIGHT)
+
+    def test_swift_case(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FURLIGHT"/>')
+        self.assertIn("fill: .furLight", S.swift_layers("x", S.parse_svg(svg)["body"]))
+
+    def test_does_not_merge_with_fur(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR"/><path d="M2 2 L3 3" fill="#FURLIGHT"/>')
+        self.assertEqual(len(S.parse_svg(svg)["body"]), 2)
+
+
+class BoundsTests(unittest.TestCase):
+    def test_line_bounds(self):
+        self.assertEqual(S.commands_bounds([("M", 1.0, 2.0), ("L", 5.0, 8.0)]), (1.0, 2.0, 5.0, 8.0))
+
+    def test_curve_extreme_is_tighter_than_control_hull(self):
+        """제어점 껍데기는 y=10 까지 가지만 실제 곡선은 7.5 까지만 간다."""
+        box = S.commands_bounds([("M", 0.0, 0.0), ("C", 0.0, 10.0, 10.0, 10.0, 10.0, 0.0)])
+        self.assertAlmostEqual(box[1], 0.0, places=6)
+        self.assertAlmostEqual(box[3], 7.5, places=6)
+
+    def test_empty(self):
+        self.assertIsNone(S.commands_bounds([]))
+
+
+class TailOrderTests(unittest.TestCase):
+    def test_tail_after_body_is_above(self):
+        svg = wrap('<g id="body"><path d="M0 0 L1 1" fill="#FUR"/></g>'
+                   '<g id="tail-a"><path d="M2 2 L3 3" fill="#FUR"/></g>')
+        _, above = S.parse_svg(svg, want_order=True)
+        self.assertTrue(above)
+
+    def test_tail_before_body_is_below(self):
+        svg = wrap('<g id="tail-a"><path d="M2 2 L3 3" fill="#FUR"/></g>'
+                   '<g id="body"><path d="M0 0 L1 1" fill="#FUR"/></g>')
+        _, above = S.parse_svg(svg, want_order=True)
+        self.assertFalse(above)
+
+    def test_no_tail_is_below(self):
+        _, above = S.parse_svg(wrap('<path d="M0 0 L1 1" fill="#FUR"/>'), want_order=True)
+        self.assertFalse(above)
+
+
 class FailureTests(unittest.TestCase):
     def test_gradient_aborts(self):
         svg = wrap('<linearGradient id="g"/><path d="M0 0 L1 1" fill="#FUR"/>')
@@ -219,6 +321,22 @@ class RealArtTests(unittest.TestCase):
         for name in ("sittingBody", "sittingTailA", "sittingTailB", "sleepingBody"):
             self.assertIn("static let %s: [CatArtLayer]" % name, swift)
         self.assertIn("GENERATED", swift)
+
+    def test_generated_swift_has_scalars(self):
+        swift = S.convert_files([self.sitting, self.sleeping])
+        self.assertIn("static let sittingTailAboveBody: Bool", swift)
+        self.assertIn("static let sittingTop: CGFloat", swift)
+        self.assertIn("static let sleepingTop: CGFloat", swift)
+        # 자는 자세는 꼬리 프레임이 없으므로 z 순서 상수도 나오지 않는다.
+        self.assertNotIn("sleepingTailAboveBody", swift)
+
+    def test_top_is_inside_the_box_and_above_the_middle(self):
+        for path in (self.sitting, self.sleeping):
+            with open(path, encoding="utf-8") as f:
+                groups = S.parse_svg(f.read())
+            box = S.layers_bounds([l for layers in groups.values() for l in layers])
+            self.assertGreater(box[3], 20)
+            self.assertLessEqual(box[3], 64)
 
     def test_all_coordinates_in_range(self):
         for path in (self.sitting, self.sleeping):
