@@ -5,10 +5,21 @@
 busy 세션은 앉은 자세(꼬리가 1초마다 흔들린다), idle 세션은 웅크려 자는 자세다.
 
 ```bash
-swift build            # 빌드
-.build/debug/ClaudeCats  # 실행 (창 없이 바탕화면에 그린다)
-swift test             # 테스트
+swift build               # 빌드
+.build/debug/ClaudeCats   # 실행 (창 없이 바탕화면에 그린다)
+swift test                # 테스트
+
+./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성
+open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 ```
+
+## 동작 원리
+
+`~/.claude/sessions/*.json` 을 3초마다 stat 폴링(내용은 mtime 이 바뀐 파일만 파싱)해서 살아있는
+interactive 세션마다 고양이 한 마리를 배치한다. busy 세션의
+`~/.claude/projects/<cwd>/<sessionId>/subagents/*.jsonl` mtime 이 15초 이내면 새끼 고양이로
+표시한다. busy 세션의 transcript 끝에서 최근 `ai-title` 을 읽어 고양이 위 말풍선으로도 보여준다.
+화면 잠금/슬립 시 정지, 배터리/저전력 시 10초 폴링 + 애니메이션 끔.
 
 ## 직접 그린 SVG 넣는 법
 
