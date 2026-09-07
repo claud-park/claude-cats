@@ -3,6 +3,8 @@
 실행 중인 Claude Code 세션을 바탕화면 위(아이콘 아래) 고양이로 보여주는 macOS 앱.
 세션마다 고양이 한 마리, 서브에이전트마다 새끼 고양이 한 마리가 붙는다.
 busy 세션은 앉은 자세(꼬리가 1초마다 흔들린다), idle 세션은 웅크려 자는 자세다.
+<img width="606" height="237" alt="image" src="https://github.com/user-attachments/assets/250fc939-4b3f-4354-9297-7dcbe0e82b28" />
+
 
 ```bash
 swift build               # 빌드
