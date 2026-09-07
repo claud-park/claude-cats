@@ -275,16 +275,17 @@ claude-cats/
 | 5분 평균 CPU (%cpu) | 0.0 (10 샘플 전부 0.0) | 2026-09-07 |
 | RSS (평균 / 최대) | 63.3 MB / 71.3 MB | 2026-09-07 |
 | `top -l 3 -stats pid,cpu,mem` | `%CPU 0.0`, `MEM 22M` | 2026-09-07 |
-| Activity Monitor 에너지 영향 | (사용자 육안 확인 필요, 아래 참고) | |
+| Activity Monitor 에너지 영향 | 0.1 (12 hr Power 0.05, App Nap No) — 사용자 확인 | 2026-09-07 |
 
-`sudo` 를 쓸 수 없어 `powermetrics` 의 CPU ms/s·Energy Impact 컬럼은 측정하지 못했다.
-아래 명령과 Activity Monitor 확인은 사용자가 직접 실행해 남겨 두면 된다.
+Activity Monitor 에너지 탭에서 사용자가 직접 확인한 값이다. 같은 목록의 상주 유틸리티
+(Shottr 0.14, EPP Notifier 0.11, PulseSetupClient 0.08) 보다 낮은 12시간 전력이라 §1 의
+"에너지 영향 낮음" 기준을 만족한다.
+
+`sudo` 를 쓸 수 없어 `powermetrics` 의 CPU ms/s 컬럼은 측정하지 않았다. 필요하면:
 
 ```bash
 sudo powermetrics --samplers tasks -i 5000 -n 6 | grep ClaudeCats
 ```
-
-Activity Monitor → 에너지 탭에서 ClaudeCats 의 "에너지 영향" 이 "낮음" 인지 눈으로 확인.
 
 **참고**: RSS 63~71MB 는 원래 목표였던 "상주 메모리 30MB 이하" 를 넘는다(그래서 §1 의 목표를
 100MB 이하로 고쳤다). `ps` RSS 는
