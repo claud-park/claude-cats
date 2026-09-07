@@ -13,6 +13,10 @@ public final class StateCollector: @unchecked Sendable {
 
     /// key: sessions/<pid>.json 경로
     private var sessionCache: [String: (modified: Date, session: Session)] = [:]
+    /// key: sessionId. url 이 nil 이면 실패 캐시(checkedAt + projectLookupRetry 후 재시도).
+    private var projectDirCache: [String: (url: URL?, checkedAt: Date)] = [:]
+    /// key: meta.json 경로 → description
+    private var metaCache: [String: String] = [:]
 
     public init(fileSystem: any FileSystem, claudeDir: URL) {
         self.fs = fileSystem
@@ -85,9 +89,58 @@ public final class StateCollector: @unchecked Sendable {
         String(cwd.map { $0 == "/" || $0 == "_" ? "-" : $0 })
     }
 
-    // MARK: - Subagents (Task 4 에서 구현)
+    // MARK: - Subagents
+
+    private struct MetaFile: Decodable {
+        let description: String?
+    }
+
+    private func projectDir(for session: Session, now: Date) -> URL? {
+        if let cached = projectDirCache[session.id] {
+            if cached.url != nil { return cached.url }
+            if now.timeIntervalSince(cached.checkedAt) < projectLookupRetry { return nil }
+        }
+        let projects = claudeDir.appendingPathComponent("projects")
+        let guess = projects
+            .appendingPathComponent(Self.encodeCwd(session.cwd))
+            .appendingPathComponent(session.id)
+        var found: URL? = (try? fs.stat(guess)) != nil ? guess : nil
+        if found == nil, let dirs = try? fs.list(projects) {
+            for dir in dirs {
+                let candidate = dir.appendingPathComponent(session.id)
+                if (try? fs.stat(candidate)) != nil {
+                    found = candidate
+                    break
+                }
+            }
+        }
+        projectDirCache[session.id] = (found, now)
+        return found
+    }
 
     private func activeSubagents(for session: Session, now: Date) -> [Subagent] {
-        []
+        guard let dir = projectDir(for: session, now: now) else { return [] }
+        let subDir = dir.appendingPathComponent("subagents")
+        guard let files = try? fs.list(subDir) else { return [] }
+
+        var result: [Subagent] = []
+        for file in files where file.pathExtension == "jsonl" {
+            guard let st = try? fs.stat(file),
+                  now.timeIntervalSince(st.modified) <= subagentActiveWindow else { continue }
+            let base = file.deletingPathExtension().lastPathComponent
+            let id = base.hasPrefix("agent-") ? String(base.dropFirst("agent-".count)) : base
+            let metaURL = file.deletingPathExtension().appendingPathExtension("meta.json")
+            let description: String
+            if let cached = metaCache[metaURL.path] {
+                description = cached
+            } else {
+                description = (try? fs.read(metaURL))
+                    .flatMap { try? JSONDecoder().decode(MetaFile.self, from: $0) }?
+                    .description ?? ""
+                metaCache[metaURL.path] = description
+            }
+            result.append(Subagent(id: id, description: description, lastActivity: st.modified))
+        }
+        return result.sorted { $0.id < $1.id }
     }
 }

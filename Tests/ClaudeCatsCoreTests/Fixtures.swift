@@ -17,4 +17,15 @@ enum Fixtures {
     static func sessionPath(pid: Int32) -> String {
         "/home/.claude/sessions/\(pid).json"
     }
+
+    static func subagentDir(encodedCwd: String, sessionId: String) -> String {
+        "/home/.claude/projects/\(encodedCwd)/\(sessionId)/subagents"
+    }
+
+    static func metaJSON(description: String) -> String {
+        """
+        {"agentType":"fork","isFork":true,"description":"\(description)",\
+        "toolUseId":"toolu_01","spawnDepth":1,"model":"inherit"}
+        """
+    }
 }
