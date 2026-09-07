@@ -13,9 +13,12 @@ final class CatLayer: CALayer {
     private let bodyLayer = CALayer()
     private let labelLayer = CATextLayer()
     private let badgeLayer = CATextLayer()
-    /// 머리 위 말풍선. 정적이다 — bubble 문자열이 바뀔 때만 path·문자열을 다시 만든다.
+    /// 머리 위 말풍선. 정적이다 — 문구·포즈·가로 위치가 바뀔 때만 path·문자열을 다시 만든다.
     private let bubbleLayer = CAShapeLayer()
     private let bubbleTextLayer = CATextLayer()
+    /// 말풍선 왼쪽 끝이 넘어가면 안 되는 화면 x. 창이 화면 전체를 덮으므로 창 좌표 0 = 화면 왼쪽 끝.
+    /// DesktopWindow 는 기본값을 그대로 쓴다.
+    var bubbleMinScreenX: CGFloat = 0
     /// 팔레트가 바뀌면 색만 갈아끼울 자리들(경로는 그대로 둔다).
     private var furSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
     private var furDarkSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
@@ -42,10 +45,13 @@ final class CatLayer: CALayer {
         badgeLayer.alignmentMode = .left
         badgeLayer.contentsScale = contentsScale
 
-        // 말풍선은 고양이 상자와 같은 좌표계에서 그린다(경로 좌표 = 고양이 좌표).
+        // 말풍선은 고양이 상자 밖(위·좌우)으로 나가므로 자기 bounds 를 따로 갖는다.
+        // anchorPoint 0 에서 `position == bounds.origin` 이면 경로 좌표 = 고양이 좌표가 된다.
+        // bounds 는 말풍선이 실제로 차지할 수 있는 최대 범위를 덮는다
+        // (x: 꼭지 중앙 32 기준 ±65 에 왼쪽 클램프 여유, y: 자는 자세 꼭지 46 ~ 앉은 자세 상단 89).
         bubbleLayer.anchorPoint = .zero
-        bubbleLayer.bounds = bounds
-        bubbleLayer.position = .zero
+        bubbleLayer.bounds = CGRect(x: -70, y: 0, width: 204, height: 100)
+        bubbleLayer.position = CGPoint(x: -70, y: 0)
         bubbleLayer.fillColor = NSColor.white.withAlphaComponent(0.95).cgColor
         bubbleLayer.strokeColor = nil
         bubbleLayer.contentsScale = contentsScale
@@ -109,8 +115,9 @@ final class CatLayer: CALayer {
             badgeLayer.isHidden = p.overflowCount == 0
         }
 
-        if first || p.bubble != previous.bubble {
-            applyBubble(p.bubble)
+        // 꼭지 y 는 포즈에, 왼쪽 클램프는 가로 위치에 걸린다. 셋 다 감시한다.
+        if first || p.bubble != previous.bubble || poseChanged || p.origin.x != previous.origin.x {
+            applyBubble(p)
         }
     }
 
@@ -207,17 +214,23 @@ final class CatLayer: CALayer {
     /// 고양이 좌표계 기준 치수. 폭 최대 130 은 슬롯 폭 140 보다 좁아 이웃과 겹치지 않는다.
     private enum Bubble {
         static let centerX: CGFloat = 32
-        static let tipY: CGFloat = 66      // 아래 꼭지 끝(머리 바로 위)
         static let notch: CGFloat = 5      // 꼭지 높이
+        static let notchHalf: CGFloat = 5  // 꼭지 밑변 반폭
         static let height: CGFloat = 18
         static let maxWidth: CGFloat = 130
         static let padding: CGFloat = 16   // 좌우 합계
         static let corner: CGFloat = 6
         static let fontSize: CGFloat = 10
+        static let screenMargin: CGFloat = 4   // 화면 왼쪽 끝에서 띄울 여백
+
+        /// 꼭지 끝 y. 자는 자세는 웅크려서 머리(귀 끝 y ≈ 43)가 훨씬 낮다.
+        static func tipY(for pose: Pose) -> CGFloat {
+            pose == .sitting ? 66 : 46
+        }
     }
 
-    private func applyBubble(_ text: String?) {
-        guard let text else {
+    private func applyBubble(_ p: CatPlacement) {
+        guard let text = p.bubble else {
             bubbleLayer.isHidden = true
             bubbleTextLayer.isHidden = true
             bubbleTextLayer.string = nil
@@ -226,14 +239,20 @@ final class CatLayer: CALayer {
         }
         let attributed = Self.fitted(text, maxWidth: Bubble.maxWidth - Bubble.padding, Self.attributedBubble)
         let width = min(Bubble.maxWidth, ceil(attributed.size().width) + Bubble.padding)
-        let bottom = Bubble.tipY + Bubble.notch
+        let tipY = Bubble.tipY(for: p.pose)
 
-        bubbleLayer.path = Self.bubblePath(width: width)
+        // 맨 왼쪽 열(origin.x = 16)에서는 가운데 정렬한 사각형이 화면 밖으로 17pt 나간다.
+        // 사각형만 오른쪽으로 밀고 꼭지는 머리 위(centerX)에 그대로 둔다.
+        let minLeft = bubbleMinScreenX - p.origin.x + Bubble.screenMargin
+        let left = max(Bubble.centerX - width / 2, minLeft)
+        let rect = CGRect(x: left, y: tipY + Bubble.notch, width: width, height: Bubble.height)
+
+        bubbleLayer.path = Self.bubblePath(rect: rect, tipY: tipY)
         bubbleTextLayer.string = attributed
         bubbleTextLayer.frame = CGRect(
-            x: Bubble.centerX - width / 2 + Bubble.padding / 2,
-            y: bottom + 1,
-            width: width - Bubble.padding,
+            x: rect.minX + Bubble.padding / 2,
+            y: rect.minY + 1,
+            width: rect.width - Bubble.padding,
             height: 14
         )
         bubbleLayer.isHidden = false
@@ -242,14 +261,12 @@ final class CatLayer: CALayer {
 
     /// 둥근 사각형 + 아래로 뻗은 삼각 꼭지를 한 경로에 담는다.
     /// 꼭지 밑변을 사각형 안쪽으로 0.5 겹쳐 이음매가 보이지 않게 한다.
-    private static func bubblePath(width: CGFloat) -> CGPath {
-        let bottom = Bubble.tipY + Bubble.notch
-        let rect = CGRect(x: Bubble.centerX - width / 2, y: bottom, width: width, height: Bubble.height)
+    private static func bubblePath(rect: CGRect, tipY: CGFloat) -> CGPath {
         let path = CGMutablePath()
         path.addRoundedRect(in: rect, cornerWidth: Bubble.corner, cornerHeight: Bubble.corner)
-        path.move(to: CGPoint(x: Bubble.centerX - 5, y: bottom + 0.5))
-        path.addLine(to: CGPoint(x: Bubble.centerX, y: Bubble.tipY))
-        path.addLine(to: CGPoint(x: Bubble.centerX + 5, y: bottom + 0.5))
+        path.move(to: CGPoint(x: Bubble.centerX - Bubble.notchHalf, y: rect.minY + 0.5))
+        path.addLine(to: CGPoint(x: Bubble.centerX, y: tipY))
+        path.addLine(to: CGPoint(x: Bubble.centerX + Bubble.notchHalf, y: rect.minY + 0.5))
         path.closeSubpath()
         return path
     }
