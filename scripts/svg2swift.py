@@ -696,10 +696,15 @@ def commands_bounds(cmds):
             box[2], box[3] = max(box[2], x), max(box[3], y)
 
     cx = cy = 0.0
+    sx = sy = 0.0          # 서브패스 시작점 — Z 는 여기로 되돌아간다
     for cmd in cmds:
         head = cmd[0]
-        if head in ("M", "L"):
+        if head == "Z":
+            cx, cy = sx, sy
+        elif head in ("M", "L"):
             cx, cy = cmd[1], cmd[2]
+            if head == "M":
+                sx, sy = cx, cy
             add(cx, cy)
         elif head == "C":
             x_lo, x_hi = _cubic_bounds(cx, cmd[1], cmd[3], cmd[5])
@@ -829,8 +834,11 @@ def parse_svg(text, want_order=False):
 # ---------------------------------------------------------------- Swift 생성
 
 
-def num(value):
-    text = "%.4f" % (value + 0.0)
+def num(value, places=2):
+    """숫자 → Swift 리터럴. 기본 소수 2자리 — 64pt 상자에서 0.01pt 는 2x 화면의 0.02px 다.
+    자릿수를 줄이면 생성 파일이 작아지고 컴파일이 빨라진다. 임포터는 places=4 로 쓴다
+    (fit 변환의 scale 을 반올림하면 바닥 정렬이 어긋난다)."""
+    text = ("%." + str(places) + "f") % (value + 0.0)
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return "0" if text in ("", "-0") else text

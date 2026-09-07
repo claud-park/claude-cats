@@ -32,7 +32,8 @@ def args(**over):
     argv = ["src.svg", "--pose", over.pop("pose", "sitting"), "--out", "out.svg",
             "--fur", "#7D6C62", "--fur-dark", "#66584F", "--fur-light", "#A09084"]
     for key, value in over.items():
-        argv.extend(["--" + key.replace("_", "-"), str(value)])
+        flag = "--" + key.replace("_", "-")
+        argv.append(flag) if value is True else argv.extend([flag, str(value)])
     return I.build_arguments(argv)
 
 
@@ -365,21 +366,100 @@ class StrokeTests(unittest.TestCase):
         self.assertNotIn("stroke", svg)
 
     def test_stroke_twin_of_a_run_of_fills_is_dropped(self):
+        """Figma 는 fill 을 조각내 놓고 stroke 는 서브패스 하나로 몰아서 낸다."""
         svg, info = convert('<path d="M0 0 L10 0 L10 10 Z" fill="white"/>'
                             '<path d="M20 0 L30 0 L30 10 Z" fill="white"/>'
-                            '<path d="M0 0 L30 0 L30 10 L0 10 Z" stroke="white" '
-                            'stroke-width="0.25"/>', pose="sleeping")
+                            '<path d="M0 0 L10 0 L10 10 Z M20 0 L30 0 L30 10 Z" '
+                            'stroke="white" stroke-width="0.25"/>', pose="sleeping")
         self.assertEqual(info["droppedStrokeTwins"], 1)
         self.assertEqual(info["body"], 2)
         self.assertNotIn("stroke", svg)
 
-    def test_outline_of_a_different_colored_shape_keeps_its_width(self):
-        """눈 테두리처럼 다른 색 외곽선은 작가가 정한 두께를 그대로 둔다(굵히지 않는다)."""
+    def test_outline_of_a_different_colored_shape_is_kept_and_floored(self):
+        """눈 테두리처럼 다른 색 외곽선은 선으로 남기고, 얇아도 사라지지 않게 바닥을 건다."""
         svg, info = convert('<path d="%s" fill="#9FBA65"/>'
                             '<path d="%s" stroke="#E9BEAF" stroke-width="0.25"/>' % (BOXY, BOXY),
                             pose="sleeping")
         self.assertEqual(info["droppedStrokeTwins"], 0)
+        width = float(re.search(r'stroke-width="([\d.]+)"', svg).group(1))
+        self.assertAlmostEqual(width * info["scale"], I.MIN_SCALED_OUTLINE, places=3)
+
+    def test_outline_twin_is_floored_on_a_775_frame_export(self):
+        """775 프레임에서 온 0.25 외곽선은 scale 0.15 를 먹으면 0.02pt 라 사라진다."""
+        svg, info = convert('<path d="M0 0 L400 0 L400 100 Z" fill="#9FBA65"/>'
+                            '<path d="M0 0 L400 0 L400 100 Z" stroke="#E9BEAF" '
+                            'stroke-width="0.25"/>', pose="sleeping")
+        self.assertAlmostEqual(info["scale"], 0.15, places=6)
+        width = float(re.search(r'stroke-width="([\d.]+)"', svg).group(1))
+        self.assertGreater(width, 0.25)
+        self.assertAlmostEqual(width * info["scale"], I.MIN_SCALED_OUTLINE, places=4)
+
+    def test_outline_twin_at_scale_one_keeps_the_authored_width(self):
+        """64 프레임 원본(scale≈1)에서는 작가가 정한 0.25 를 그대로 통과시킨다."""
+        svg, info = convert('<path d="M0 0 L60 0 L60 20 Z" fill="#9FBA65"/>'
+                            '<path d="M0 0 L60 0 L60 20 Z" stroke="#E9BEAF" '
+                            'stroke-width="0.25"/>', pose="sleeping")
+        self.assertAlmostEqual(info["scale"], 1.0, places=6)
         self.assertIn('stroke-width="0.25"', svg)
+
+    def test_standalone_line_art_gets_the_bigger_floor(self):
+        """짝이 없는 진짜 선(수염)은 더 두꺼운 바닥(0.6)을 받는다."""
+        svg, info = convert('<path d="M0 0 L60 0 L60 20 Z" fill="#9FBA65"/>'
+                            '<path d="M5 5 L40 12" stroke="#E9BEAF" stroke-width="0.25"/>',
+                            pose="sleeping")
+        width = float(re.search(r'stroke-width="([\d.]+)"', svg).group(1))
+        self.assertAlmostEqual(width * info["scale"], I.MIN_SCALED_STROKE, places=3)
+
+    def test_tiny_shapes_are_not_paired_by_a_loose_tolerance(self):
+        """작은 도형끼리는 0.5 짜리 고정 오차로 짝지으면 안 된다 — 크기에 비례해야 한다."""
+        svg, info = convert('<path d="M10 10 L10.4 10 L10.4 10.4 Z" fill="#7D6C62"/>'
+                            '<path d="M10.3 10.3 L10.6 10.3 L10.6 10.7 Z" stroke="#7D6C62" '
+                            'stroke-width="0.25"/>'
+                            '<path d="%s" fill="#F6EEE7"/>' % BOXY, pose="sleeping")
+        self.assertEqual(info["droppedStrokeTwins"], 0)
+        self.assertEqual(info["body"], 3)
+        self.assertIn("stroke", svg)
+
+    def test_command_count_must_match_for_small_shapes(self):
+        """자리가 같아도 명령 개수가 다르면 다른 도형이다."""
+        square = "M10 10 L20 10 L20 20 L10 20 Z"
+        triangle = "M10 10 L20 10 L20 20 Z"
+        _, info = convert('<path d="%s" fill="#7D6C62"/>'
+                          '<path d="%s" stroke="#7D6C62" stroke-width="0.25"/>'
+                          '<path d="%s" fill="#F6EEE7"/>' % (square, triangle, BOXY),
+                          pose="sleeping")
+        self.assertEqual(info["droppedStrokeTwins"], 0)
+
+    def test_keep_stroke_twins_flag_disables_the_pairing(self):
+        svg, info = convert('<path d="%s" fill="#7D6C62"/>'
+                            '<path d="%s" stroke="#7D6C62" stroke-width="0.25"/>' % (BOXY, BOXY),
+                            pose="sleeping", keep_stroke_twins=True)
+        self.assertEqual(info["droppedStrokeTwins"], 0)
+        self.assertEqual(info["body"], 2)
+        self.assertIn('stroke="#FUR"', svg)
+
+    def test_dropped_twins_are_reported(self):
+        _, info = convert('<path d="%s" fill="#7D6C62"/>'
+                          '<path d="%s" stroke="#7D6C62" stroke-width="0.25"/>' % (BOXY, BOXY),
+                          pose="sleeping")
+        self.assertEqual(len(info["droppedTwinLines"]), 1)
+        line = info["droppedTwinLines"][0]
+        self.assertIn("path 2", line)
+        self.assertIn("#7D6C62", line)
+        self.assertIn("M 100 100", line)
+
+    def test_body_stroke_is_never_paired_with_a_discarded_sleeping_tail_b(self):
+        """tail-b 는 자는 자세에서 버려진다. 그 fill 과 몸통 stroke 를 짝지으면
+        몸통 선이 조용히 사라진다 — 그래서 짝짓기는 버킷을 나눈 뒤에 한다."""
+        small = "M10 10 L14 10 L14 18 Z"
+        svg, info = convert('<path d="%s" fill="#F6EEE7"/>'
+                            '<path id="tail-b" d="%s" fill="#7D6C62"/>'
+                            '<path id="tail-a" d="M30 30 L34 30 L34 38 Z" fill="#7D6C62"/>'
+                            '<path d="%s" stroke="#7D6C62" stroke-width="0.25"/>'
+                            % (BOXY, small, small), pose="sleeping")
+        self.assertEqual(info["droppedStrokeTwins"], 0)
+        self.assertEqual(info["body"], 3)      # 몸통 + 접힌 tail-a + 살아남은 stroke
+        self.assertIn('stroke="#FUR"', svg)
 
     def test_line_join_and_cap_survive(self):
         svg, _ = convert('<path d="%s" stroke="#66584F" stroke-width="4" '

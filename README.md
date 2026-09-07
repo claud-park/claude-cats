@@ -73,8 +73,14 @@ scripts/generate-cat-art.sh                       # import + 생성 + swift buil
 python3 -m unittest scripts/test_import_cat_svg.py scripts/test_svg2swift.py
 ```
 
-`generate-cat-art.sh` 는 `Design/cats/source/<포즈>-figma.svg` 가 있을 때만 import 를
-돌린다. 원본 없이 `Design/cats/*.svg` 를 손으로 그려 쓰는 예전 방식도 그대로 된다.
+털색 세 가지(`FUR` / `FUR_DARK` / `FUR_LIGHT`)의 **정본은 `scripts/generate-cat-art.sh`**
+맨 위에 있다. Figma 파일의 색을 바꾸면 거기만 고치면 된다.
+
+`generate-cat-art.sh` 는 `Design/cats/source/<포즈>-figma.svg` 가 있을 때만 import 를 돌린다.
+원본 없이 `Design/cats/*.svg` 를 손으로 그려 쓰는 예전 방식도 되지만, 그때
+`sitting.svg` 에는 `<g id="tail-a">` 와 `<g id="tail-b">` 가 **반드시** 있어야 한다 —
+런타임(`CatLayer`)이 `CatArt.sittingTailA` / `sittingTailB` / `sittingTailAboveBody` 를
+참조하므로, 없으면 생성된 Swift 가 컴파일되지 않는다.
 
 ### import-cat-svg.py 가 하는 일
 
@@ -99,8 +105,13 @@ Figma 는 한 도형의 fill 과 stroke 를 **자리가 같은 `<path>` 두 벌*
 | --- | --- |
 | 한 `<path>` 에 같은 색 `fill` 과 `stroke` 가 같이 있다 | stroke 를 버린다 |
 | stroke 만 있는데 같은 색 fill 도형과 자리(bbox)가 같다 | 이미 칠해져 있으니 그 도형을 통째로 버린다 |
-| stroke 만 있는데 **다른 색** 도형과 자리가 같다 (눈 테두리 등) | 작가가 정한 두께를 그대로 둔다 |
-| 그 밖의 진짜 선 그림 (수염·입·바닥선) | 축소 후 두께가 최소 0.6pt 가 되게 키운다 — 안 그러면 64pt 상자에서 사라진다 |
+| stroke 만 있는데 **다른 색** 도형과 자리가 같다 (눈 테두리 등) | 선으로 남긴다 |
+| 남은 stroke 전부 (외곽선 · 수염 · 입 · 바닥선) | 축소 후 두께가 최소 0.6pt 가 되게 키운다 — 안 그러면 64pt 상자에서 사라진다 |
+
+"자리가 같다"는 판정은 bbox 가 **도형 크기의 25%(최대 0.5) 안에서** 일치하고 path 명령
+개수도 비슷할 때만 한다(작은 도형은 개수가 정확히 같아야 한다). 그래도 미심쩍으면
+`--keep-stroke-twins` 로 이 정리를 통째로 끄고 비교해 보면 된다. 버린 stroke 는 하나씩
+stderr 에 찍는다(`path 번호`, 색, bbox, `d` 앞 40자).
 
 ### 파일 규약
 
@@ -130,10 +141,13 @@ Figma 는 한 도형의 fill 과 stroke 를 **자리가 같은 `<path>` 두 벌*
 | `#rgb` `#rgba` `#rrggbb` `#rrggbbaa`, 기본 색 이름 | 고정색. 흰 패치·눈·코·수염처럼 털색과 무관한 부분에 쓴다 |
 | `none` | 칠하지 않음 |
 
-`#FUR`(현재 원본은 `#7D6C62`)이 **주 털색**이고 나머지 둘은 거기서 파생된 톤이다 —
-`#FURDARK`(`#66584F`, 약 15% 어둡게)와 `#FURLIGHT`(`#A09084`, 흰색 쪽으로 약 27%)는
-선택 사항이라 안 써도 되지만, 쓰면 팔레트를 바꿔도 명도 관계가 그대로 유지된다
-(`CatShapes.palette` 의 8쌍이 모두 이 관계로 만들어져 있다).
+`#FUR` 이 **주 털색**이고 나머지 둘은 거기서 파생된 톤이다 — `#FURDARK`(약 15% 어둡게)와
+`#FURLIGHT`(흰색 쪽으로 약 27%)는 **선택 사항**이다. 안 써도 되고, 쓰면 팔레트를 바꿔도
+명도 관계가 그대로 유지된다(`CatShapes.palette` 의 8쌍이 모두 이 관계로 만들어져 있다).
+지금 원본 기준으로 `#FURLIGHT` 는 앉은 자세에서 한 군데 쓰이고, **`#FURDARK` 는 두 포즈
+어디에도 쓰이지 않는다**(사용자가 마지막 내보내기에서 뺐다). 팔레트는 세 색을 다 지원하므로
+다음 내보내기에서 다시 쓰면 그대로 살아난다. 세 색의 실제 값은
+`scripts/generate-cat-art.sh` 에 있다.
 
 털색은 팔레트를 갈아끼워도 경로를 다시 만들지 않고 색만 바꾼다. 그래서 `#FUR` 을 쓴
 도형에는 `fill-opacity` / `stroke-opacity` 대신 `opacity` 를 쓰는 편이 결과가 깔끔하다.

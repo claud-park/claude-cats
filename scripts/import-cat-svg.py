@@ -14,8 +14,9 @@
     `tail-b` 가 없으면 `tail-a` 를 살짝 회전시켜 두 번째 프레임을 만든다.
   - 그림 bbox 를 64×64 상자에 균일 스케일로 맞춘다(가로 가운데, 바닥 정렬).
   - 털색 세 가지를 `#FUR` / `#FURDARK` / `#FURLIGHT` 플레이스홀더로 바꾼다.
-  - Figma 의 0.25 짜리 헤어라인 stroke 를 정리한다(같은 색 fill 이 있으면 버리고,
-    stroke 만 있는 도형은 축소 후에도 보이도록 최소 두께를 준다).
+  - Figma 가 fill 과 stroke 를 쪼개 놓은 stroke 쌍을 정리하고, 남은 선은 축소 후에도
+    보이도록 최소 두께를 준다. 버린 stroke 는 stderr 에 하나씩 찍는다.
+    의심스러우면 `--keep-stroke-twins` 로 이 정리를 끄고 비교하면 된다.
 """
 
 import argparse
@@ -28,7 +29,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import svg2swift as S  # noqa: E402
 
 BOX = S.BOX
+# 홀로 선 그림(수염·입·바닥선)은 이만큼은 돼야 64pt 상자에서 읽힌다.
 MIN_SCALED_STROKE = 0.6
+# 이미 칠해진 도형 위에 얹힌 외곽선은 더 얇아도 된다 — 다만 완전히 사라지면 안 되므로
+# 2x 화면에서 0.5px 인 0.25pt 를 바닥으로 둔다. 775 프레임 원본의 0.25(→0.02pt)를 살리고,
+# 64 프레임 원본(scale≈1)에서는 작가가 정한 0.25 를 그대로 통과시킨다.
+MIN_SCALED_OUTLINE = 0.25
+# fit 변환의 scale 을 2자리로 반올림하면 바닥 정렬이 어긋난다. 임포터는 4자리를 쓴다.
+PLACES = 4
+
+
+def num(value):
+    return S.num(value, PLACES)
 
 # 그대로 실어 나르는 표현 속성(상속된다). transform·불투명도는 따로 처리한다.
 STYLE_KEYS = (
@@ -40,8 +52,6 @@ GEOMETRY_KEYS = (
     "d", "points", "cx", "cy", "r", "rx", "ry", "x", "y", "width", "height",
     "x1", "y1", "x2", "y2",
 )
-DROPPED_ATTRS = ("clip-rule", "id", "class", "clip-path")
-
 CONTAINER_TAGS = {"g", "a"}
 SKIPPED_TAGS = {"title", "desc", "metadata"}
 
@@ -84,9 +94,13 @@ class Shape:
         self.element = element
         self.bucket = "body"
         # 'same'   = 앞선 fill 도형의 stroke 쌍(Figma 가 쪼개 놓은 것) → stroke 를 버린다
-        # 'outline'= 같은 자리 다른 색 도형의 외곽선 → 작가가 정한 두께를 그대로 둔다
+        # 'outline'= 같은 자리 다른 색 도형의 외곽선 → 두께는 그대로 두되 최소 두께는 건다
         self.twin = None
+        self.twin_of = []
         self._cmds = None
+
+    def label(self):
+        return "path %s" % self.index if self.index is not None else "<%s>" % self.tag
 
     def cmds(self):
         """원본 좌표계 기준 절대 명령 리스트(자기 transform 까지 적용)."""
@@ -127,12 +141,10 @@ def check_paint(style):
 
 class Importer:
     def __init__(self, root, view_box):
-        self.root = root
         self.min_x, self.min_y, self.width, self.height = view_box
         self.clip_paths = {}
         self.shapes = []
         self.path_count = 0
-        self.tail_groups = {}      # 'tail-a'|'tail-b' → 그 id 를 단 도형들의 index 목록
         self._collect_defs(root)
 
     # ------------------------------------------------------------ defs
@@ -144,11 +156,10 @@ class Importer:
                 if ident:
                     self.clip_paths[ident] = child
 
-    def _covers_view_box(self, rect, matrix=S.IDENTITY):
+    def _covers_view_box(self, rect, matrix):
         if S.local_name(rect.tag) != "rect":
             return False
-        if (rect.get("transform") or "").strip():
-            return False
+        matrix = S.mat_mul(matrix, S.parse_transform(rect.get("transform")))
         x = S.number_attr(rect, "x", 0.0)
         y = S.number_attr(rect, "y", 0.0)
         w = S.number_attr(rect, "width", 0.0)
@@ -160,7 +171,8 @@ class Importer:
                 and x1 >= self.min_x + self.width - eps
                 and y1 >= self.min_y + self.height - eps)
 
-    def check_clip(self, element, name):
+    def check_clip(self, element, name, matrix):
+        """clip-path 는 그 요소의 (transform 이 적용된) 사용자 좌표계에서 해석된다."""
         raw = (element.get("clip-path")
                or parse_style_declarations(element).get("clip-path") or "").strip()
         if not raw or raw.lower() == "none":
@@ -172,7 +184,7 @@ class Importer:
         if clip is None:
             fail("<%s> 가 참조하는 clipPath #%s 를 찾을 수 없다." % (name, ident))
         children = [c for c in clip if S.local_name(c.tag) not in SKIPPED_TAGS]
-        if len(children) != 1 or not self._covers_view_box(children[0]):
+        if len(children) != 1 or not self._covers_view_box(children[0], matrix):
             fail("<%s> 의 clip-path #%s 는 viewBox 전체를 덮는 <rect> 가 아니라 변환할 수 없다. "
                  "내보내기 전에 flatten 해야 한다." % (name, ident))
         # 전체 프레임 클립은 아무것도 자르지 않는다 — 그냥 벗긴다.
@@ -194,9 +206,8 @@ class Importer:
                          or parse_style_declarations(child).get(attribute) or "").strip()
                 if value and value.lower() != "none":
                     fail("<%s> 의 %s=%r 는 변환할 수 없다." % (name, attribute, value))
-            self.check_clip(child, name)
-
             child_matrix = S.mat_mul(matrix, S.parse_transform(child.get("transform")))
+            self.check_clip(child, name, child_matrix)
             child_style = resolve_style(child, style)
             check_paint(child_style)
             ident = (child.get("id") or "").strip().lower()
@@ -249,21 +260,23 @@ def shape_attributes(shape, fit_scale, colors):
         raw = style.get("stroke-width")
         width = 1.0 if raw is None else S.parse_scalar(raw, "stroke-width")
         own = S.mat_scale_factor(shape.matrix) * fit_scale
-        if fill is None and own > 0 and shape.twin is None:
-            # 진짜 선 그림(수염·입)이 축소 후 사라지지 않게 최소 두께를 준다.
-            # 다른 도형의 외곽선(twin == 'outline')은 작가가 정한 두께 그대로 둔다.
-            width = max(width, MIN_SCALED_STROKE / own)
-        out.append(("stroke-width", S.num(width)))
+        if fill is None and own > 0:
+            # 선이 축소 후 사라지지 않게 **렌더링 두께** 기준으로 최소치를 준다.
+            # 다른 도형의 외곽선에도 (더 낮은) 바닥을 건다 — 775 프레임에서 내보낸
+            # 0.25 는 축소하면 0.02pt 라 안 걸면 사라진다.
+            floor = MIN_SCALED_OUTLINE if shape.twin == "outline" else MIN_SCALED_STROKE
+            width = max(width, floor / own)
+        out.append(("stroke-width", num(width)))
         for key in ("stroke-linejoin", "stroke-linecap", "stroke-opacity"):
             if style.get(key):
                 out.append((key, style[key]))
 
     opacity = float(style.get("_opacity", 1.0))
     if abs(opacity - 1.0) > 1e-9:
-        out.append(("opacity", S.num(opacity)))
+        out.append(("opacity", num(opacity)))
 
     if shape.matrix != S.IDENTITY:
-        out.append(("transform", "matrix(%s)" % " ".join(S.num(v) for v in shape.matrix)))
+        out.append(("transform", "matrix(%s)" % " ".join(num(v) for v in shape.matrix)))
     return out
 
 
@@ -315,37 +328,80 @@ def union_box(boxes):
             max(b[2] for b in boxes), max(b[3] for b in boxes))
 
 
+def box_tolerance(box):
+    """bbox 비교 허용 오차. 도형보다 큰 오차를 쓰면 작은 도형끼리 아무렇게나 짝지어진다.
+    그래서 절대값 0.5 와 도형 크기의 25% 중 작은 쪽을 쓴다."""
+    if not box:
+        return 0.0
+    return min(0.5, 0.25 * max(box[2] - box[0], box[3] - box[1]))
+
+
 def same_box(a, b, tolerance):
     return bool(a) and bool(b) and max(abs(x - y) for x, y in zip(a, b)) <= tolerance
 
 
-def mark_stroke_twins(shapes, tolerance=0.5):
-    """Figma 는 한 도형의 fill 과 stroke 를 **자리가 같은 path 두 벌**로 내보낸다
-    (fill 여러 개 + stroke 하나인 경우도 있다). 그런 stroke 를 찾아 표시한다.
+def similar_counts(a, b):
+    """명령 개수 비교. 작은 도형은 정확히 같아야 하고, 큰 도형은 20% 까지 봐준다 —
+    Figma 는 큰 실루엣의 stroke 를 fill 보다 촘촘하게 내보낸다(측정: 374 vs 440)."""
+    biggest = max(a, b)
+    return abs(a - b) <= (0 if biggest < 20 else 0.2 * biggest)
 
-    같은 색이면 그 fill 이 이미 칠하고 있으니 stroke 는 버린다. 색이 다르면 그 도형의
-    외곽선이므로(눈 테두리 등) 작가가 정한 두께를 그대로 둔다 — 헤어라인 최소 두께
-    규칙은 진짜 선 그림(수염·입)에만 건다.
+
+def mark_stroke_twins(shapes):
+    """Figma 는 한 도형의 fill 과 stroke 를 **자리가 같은 path 두 벌**로 내보낸다
+    (fill 조각 여러 개 + stroke 하나인 경우도 있다). 그런 stroke 를 찾아 표시한다.
+
+    같은 색이면 그 fill 이 이미 칠하고 있으니 stroke 를 통째로 버린다. 색이 다르면 그
+    도형의 외곽선이다(눈 테두리 등) — 두께는 유지하되 축소 후 사라지지 않게 최소 두께
+    규칙은 똑같이 건다.
+
+    짝짓기 조건은 두 가지다: bbox 가 도형 크기에 비례한 오차 안에서 같고, path 명령
+    개수도 비슷해야 한다. 둘 다 봐야 작은 도형이 엉뚱하게 짝지어지지 않는다.
     """
     boxes = [shape.bounds() for shape in shapes]
+    counts = [len(shape.cmds()) for shape in shapes]
     fills = [normal_color(shape.attrs.get("fill")) for shape in shapes]
     strokes = [normal_color(shape.attrs.get("stroke")) for shape in shapes]
     for i, shape in enumerate(shapes):
         if strokes[i] is None or fills[i] is not None:
             continue
-        # 1) 바로 앞의 "같은 색 fill" 연속 구간과 자리가 같은가.
+        tolerance = box_tolerance(boxes[i])
+        # 1) 바로 앞의 "같은 색 fill" 연속 구간과 자리·명령 수가 같은가.
         run, j = [], i - 1
         while j >= 0 and fills[j] == strokes[i] and strokes[j] is None:
-            run.append(boxes[j])
+            run.append(j)
             j -= 1
-        if run and same_box(union_box(run), boxes[i], tolerance):
+        if (run and same_box(union_box([boxes[k] for k in run]), boxes[i], tolerance)
+                and similar_counts(sum(counts[k] for k in run), counts[i])):
             shape.twin = "same"
+            shape.twin_of = [shapes[k] for k in run]
             continue
-        # 2) 아무 fill 도형과 자리가 같으면 그 도형의 외곽선이다.
-        for k, other in enumerate(shapes):
-            if k != i and fills[k] is not None and same_box(boxes[k], boxes[i], tolerance):
-                shape.twin = "same" if fills[k] == strokes[i] else "outline"
-                break
+        # 2) 자리·명령 수가 같은 fill 도형을 찾는다. 같은 색이 있으면 그쪽을 고른다.
+        match = None
+        for k in range(len(shapes)):
+            if k == i or fills[k] is None:
+                continue
+            if same_box(boxes[k], boxes[i], tolerance) and similar_counts(counts[k], counts[i]):
+                if fills[k] == strokes[i]:
+                    match = k
+                    break
+                if match is None:
+                    match = k
+        if match is not None:
+            shape.twin = "same" if fills[match] == strokes[i] else "outline"
+            shape.twin_of = [shapes[match]]
+
+
+def twin_report(shape):
+    """버린 stroke 쌍 한 줄 — 선이 사라졌다는 신고가 오면 여기부터 본다."""
+    box = shape.bounds()
+    data = (shape.element.get("d") or "").strip().replace("\n", " ")
+    return "%s stroke=%s bbox=(%s) ← %s  d=%s%s" % (
+        shape.label(), shape.attrs.get("stroke"),
+        ", ".join(num(v) for v in box) if box else "",
+        ", ".join(other.label() for other in shape.twin_of),
+        data[:40], "…" if len(data) > 40 else "",
+    )
 
 
 def largest_body_index(body):
@@ -384,6 +440,8 @@ def build_arguments(argv):
     parser.add_argument("--tail-pivot", default=None,
                         help="회전 중심 'X,Y' (원본 좌표). 기본값은 꼬리 bbox 의 (minX, maxY)")
     parser.add_argument("--pad", type=float, default=2.0, help="64 상자 안쪽 여백. 기본 2")
+    parser.add_argument("--keep-stroke-twins", action="store_true",
+                        help="Figma 의 fill/stroke 쌍 정리를 끈다 (선이 사라졌을 때 확인용)")
     return parser.parse_args(argv)
 
 
@@ -399,17 +457,11 @@ def convert(text, args):
 
     view_box = parse_view_box(root)
     importer = Importer(root, view_box)
-    importer.check_clip(root, "svg")
+    importer.check_clip(root, "svg", S.IDENTITY)
     # 루트 <svg> 의 표현 속성도 상속된다 — Figma 는 fill="none" 을 여기 단다.
     importer.walk(root, resolve_style(root, {}), S.IDENTITY, "body")
     if not importer.shapes:
         fail("변환할 도형이 없다.")
-
-    mark_stroke_twins(importer.shapes)
-    # 같은 색 fill 이 이미 칠하고 있는 stroke 쌍은 통째로 버린다(아무것도 안 그린다).
-    dropped_twins = [s for s in importer.shapes
-                     if s.twin == "same" and normal_color(s.attrs.get("fill")) is None]
-    importer.shapes = [s for s in importer.shapes if s not in dropped_twins]
 
     tail_a = [s for s in importer.shapes if s.bucket == "tail-a"]
     tail_b = [s for s in importer.shapes if s.bucket == "tail-b"]
@@ -441,7 +493,20 @@ def convert(text, args):
              "'tail-b')로 바꾸고 \"Include id attribute\" 를 켜서 다시 내보내거나, "
              "--tail-paths 12,13,14 처럼 path 순번을 넘겨라.")
 
-    body = [s for s in importer.shapes if s.bucket == "body"]
+    # stroke 쌍 정리는 **버킷을 나눈 뒤** 한다 — 버려질 tail-b 의 fill 과 몸통 stroke 가
+    # 짝지어져 몸통 선이 조용히 사라지면 안 된다.
+    kept = [s for s in importer.shapes if s.bucket != "drop"]
+    dropped_twins = []
+    if not args.keep_stroke_twins:
+        mark_stroke_twins(kept)
+        dropped_twins = [s for s in kept
+                         if s.twin == "same" and normal_color(s.attrs.get("fill")) is None]
+        gone = {id(s) for s in dropped_twins}
+        kept = [s for s in kept if id(s) not in gone]
+
+    body = [s for s in kept if s.bucket == "body"]
+    tail_a = [s for s in kept if s.bucket == "tail-a"]
+    tail_b = [s for s in kept if s.bucket == "tail-b"]
     drawn = body + tail_a + tail_b
 
     rotate = None
@@ -455,7 +520,7 @@ def convert(text, args):
             pivot = (float(parts[0]), float(parts[1]))
         else:
             pivot = (box[0], box[3])      # 꼬리가 몸에 닿는 쪽(왼쪽 아래)
-        rotate = "rotate(%s %s %s)" % (S.num(args.tail_angle), S.num(pivot[0]), S.num(pivot[1]))
+        rotate = "rotate(%s %s %s)" % (num(args.tail_angle), num(pivot[0]), num(pivot[1]))
         tail_b = tail_a
         synthesized = True
         drawn = drawn + tail_a           # 회전본도 상자 안에 들어와야 한다
@@ -483,7 +548,7 @@ def convert(text, args):
     scale = (BOX - 2.0 * args.pad) / max(bw, bh)
     tx = BOX / 2.0 - scale * (box[0] + box[2]) / 2.0        # 가로 가운데
     ty = BOX - args.pad - scale * box[3]                    # 바닥 정렬
-    fit = "translate(%s %s) scale(%s)" % (S.num(tx), S.num(ty), S.num(scale))
+    fit = "translate(%s %s) scale(%s)" % (num(tx), num(ty), num(scale))
 
     colors = {
         normal_color(args.fur): "#FUR",
@@ -513,6 +578,7 @@ def convert(text, args):
     return "\n".join(parts), {
         "shapes": len(drawn),
         "droppedStrokeTwins": len(dropped_twins),
+        "droppedTwinLines": [twin_report(s) for s in dropped_twins],
         "body": len(body),
         "tailA": len(tail_a),
         "tailB": len(tail_b),
@@ -529,12 +595,14 @@ def main(argv):
     svg, info = convert(text, args)
     with open(args.out, "w", encoding="utf-8") as handle:
         handle.write(svg)
+    for line in info["droppedTwinLines"]:
+        sys.stderr.write("  stroke 쌍 제거: %s\n" % line)
     sys.stderr.write(
         "import-cat-svg: %s → %s (body %d, tail-a %d, tail-b %d%s, stroke 쌍 %d개 제거, "
         "scale %s, tailAboveBody %s)\n"
         % (os.path.basename(args.source), args.out, info["body"], info["tailA"],
            info["tailB"], " 합성" if info["synthesizedTailB"] else "",
-           info["droppedStrokeTwins"], S.num(info["scale"]),
+           info["droppedStrokeTwins"], num(info["scale"]),
            "true" if info["tailAboveBody"] else "false")
     )
     return 0
