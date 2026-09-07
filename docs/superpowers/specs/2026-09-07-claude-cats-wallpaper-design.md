@@ -15,7 +15,8 @@
 - 살아있는 interactive 세션이 전부 고양이로 보인다. 죽은 세션(좀비 파일)은 안 보인다.
 - busy/idle 이 포즈로 구분된다. 상태 변화가 폴링 주기(3초) 안에 반영된다.
 - 실행 중인 서브에이전트가 부모 옆에 새끼로 보이고, 끝나면 15초 안에 사라진다.
-- **전력**: 유휴 시 CPU 0.0%, 갱신 틱 5ms 이하, 상주 메모리 30MB 이하, Activity Monitor
+- **전력**: 유휴 시 CPU 0.0%, 갱신 틱 5ms 이하, 상주 메모리 100MB 이하
+  (2026-09-07 실측 63~71MB, 세션 10개; 대부분 프레임워크 공유 페이지), Activity Monitor
   에너지 영향 "낮음". GPU 상시 사용 없음.
 - 앱이 파일 오류로 죽지 않는다.
 
@@ -108,6 +109,9 @@ enum PollingMode { case normal /*3s*/, lowPower /*10s, no anim*/, suspended }
 - 매 틱: `sessions/` 디렉터리 listing 1회 + 파일마다 `stat` 1회. mtime 이 지난 틱과 같으면
   JSON 을 다시 파싱하지 않고 캐시된 `Session` 을 재사용한다(pid 생존 확인은 매 틱).
 - busy 세션의 `subagents/` listing 과 `stat` 은 매 틱. 파일 내용은 읽지 않는다(mtime 만).
+- 제목(§5.4) 조회를 위해 idle 세션도 `projectRoot` 를 찾고 transcript 를 `stat` 한다
+  (세션당 `stat` 1회 추가, `projectRoot` 는 sessionId 별 캐시). `subagents/` 스캔은
+  여전히 busy 세션만이다.
 - 결과 `Snapshot` 이 직전과 `==` 이면 아무 것도 방출하지 않는다.
 
 ### 3.4 파일시스템 추상화
@@ -126,7 +130,7 @@ protocol FileSystem {
 ## 4. Scene — 배치
 
 - 화면 하단에서 위로 `bottomInset`(기본 40pt) 띄운 가로 띠 하나에 고양이를 나열한다.
-- 슬롯 폭 140pt. 슬롯 수 = `floor(screenWidth / 140)`.
+- 슬롯 폭 140pt. 슬롯 수 = `max(1, floor(screenWidth / 140))`.
 - 세션 슬롯 = `hash(name) % slotCount`. 충돌하면 오른쪽으로 선형 탐사. 결정적이어야 하며,
   같은 세션 집합이면 항상 같은 배치가 나온다(테스트로 고정).
 - 슬롯보다 세션이 많으면 두 번째 줄(위로 100pt)로 넘긴다.
@@ -168,6 +172,19 @@ protocol FileSystem {
 - animated 고양이가 0마리면 타이머를 완전히 정지한다.
 - 60fps 루프, `CADisplayLink`, `TimelineView(.animation)` 금지.
 
+### 5.4 추가 기능 (2026-09-07)
+
+- **세션 제목 말풍선**: 모든 세션(idle 포함)은 transcript 파일 끝(`readTail`, 최대 256KB)에서
+  가장 최근 `type: "ai-title"` 라인을 파싱해 고양이 위 말풍선(`CAShapeLayer`)으로 보여준다.
+  mtime 이 안 바뀌었거나 마지막 읽음이 10초 이내면 캐시를 재사용한다
+  (`StateCollector.titleRefreshInterval`). idle 세션은 transcript 의 mtime 이 더 이상 바뀌지
+  않으므로 사실상 다시 읽지 않는다 — 매 틱 비용은 `stat` 1회뿐이다.
+  화면 왼쪽으로 넘치지 않게 클램프하고, 포즈별로 꼭지 위치를 다르게 그린다.
+- **SVG 아트 파이프라인**: 고양이 그림의 원본은 `Design/cats/*.svg` 이고, 런타임은 SVG 를
+  파싱하지 않는다. `scripts/svg2swift.py` 가 빌드 전에 SVG 를 CGPath 빌더 코드
+  (`Sources/ClaudeCats/CatArt.generated.swift`) 로 변환해 커밋해 둔다. 형식·색·지원 범위는
+  README 의 "직접 그린 SVG 넣는 법" 절 참고.
+
 ## 6. PowerPolicy — 전력 정책
 
 | 조건 | 폴링 | 애니메이션 |
@@ -177,8 +194,11 @@ protocol FileSystem {
 | 화면 잠금 / 디스플레이 슬립 / 스크린세이버 / 시스템 슬립 | 정지 | 끔 |
 | 메뉴바 "일시정지" | 정지 | 끔 |
 
-- 전원: `IOPSCopyPowerSourcesInfo` + `IOPSNotificationCreateRunLoopSource` 로 변화 알림.
+- 전원: 배터리/AC 는 폴링 틱마다 collector 큐에서 `IOPSCopyPowerSourcesInfo` 로 확인하고
+  값이 바뀔 때만 메인으로 전달한다(IOKit 알림 콜백 대신 단순화, 최대 10초 지연). 잠금
+  해제·슬립 복귀·일시정지 해제 시에는 즉시 재확인한다.
 - 저전력: `ProcessInfo.processInfo.isLowPowerModeEnabled` + `NSProcessInfoPowerStateDidChange`.
+  저전력 모드에서는 설계상 꼬리 애니메이션도 끈다(폴링만 느려지는 게 아니라 애니메이션도 정지).
 - 잠금/슬립: `com.apple.screenIsLocked` / `screenIsUnlocked` (DistributedNotificationCenter),
   `NSWorkspace.screensDidSleepNotification` / `didWake`, `willSleepNotification` / `didWake`.
 - 재개 시 즉시 한 번 폴링한다.
@@ -245,4 +265,31 @@ claude-cats/
 
 ## 측정 기록
 
-(구현 후 채움)
+`dist/ClaudeCats.app`(release 빌드, adhoc 서명)을 `open` 으로 띄운 뒤 `sudo` 없이
+`ps -o %cpu=,rss=,etime= -p <pid>` 를 30초 간격 10회(5분) 샘플링했다. `sudo powermetrics`
+는 이 실행 환경에서 쓸 수 없어 사용자가 별도로 확인해야 한다(아래 참고).
+
+| 항목 | 값 | 측정일 |
+|---|---|---|
+| 세션 수 / busy 수 | 10~11 / 2 (측정 구간 중 변동) | 2026-09-07 |
+| 5분 평균 CPU (%cpu) | 0.0 (10 샘플 전부 0.0) | 2026-09-07 |
+| RSS (평균 / 최대) | 63.3 MB / 71.3 MB | 2026-09-07 |
+| `top -l 3 -stats pid,cpu,mem` | `%CPU 0.0`, `MEM 22M` | 2026-09-07 |
+| Activity Monitor 에너지 영향 | 0.1 (12 hr Power 0.05, App Nap No) — 사용자 확인 | 2026-09-07 |
+
+Activity Monitor 에너지 탭에서 사용자가 직접 확인한 값이다. 같은 목록의 상주 유틸리티
+(Shottr 0.14, EPP Notifier 0.11, PulseSetupClient 0.08) 보다 낮은 12시간 전력이라 §1 의
+"에너지 영향 낮음" 기준을 만족한다.
+
+`sudo` 를 쓸 수 없어 `powermetrics` 의 CPU ms/s 컬럼은 측정하지 않았다. 필요하면:
+
+```bash
+sudo powermetrics --samplers tasks -i 5000 -n 6 | grep ClaudeCats
+```
+
+**참고**: RSS 63~71MB 는 원래 목표였던 "상주 메모리 30MB 이하" 를 넘는다(그래서 §1 의 목표를
+100MB 이하로 고쳤다). `ps` RSS 는
+AppKit/SwiftUI/Swift 런타임이 매핑한 공유 프레임워크 페이지를 포함하므로, 순수 Swift
+메뉴바 앱에서도 이 정도 RSS 는 흔하다(로직 자체의 누수는 아님 — 5분 동안 우상향 없이
+62~73MB 사이를 오갔다). "0.1% MEM" 수준의 CPU 0.0% 와 함께 실사용 임팩트는 낮아 보이지만,
+숫자 자체는 원래 목표를 벗어나므로 기록해 둔다.

@@ -2,3 +2,7 @@
 *.app/
 .DS_Store
 .swiftpm/
+.superpowers/
+dist/
+__pycache__/
+*.pyc

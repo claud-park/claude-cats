@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256">
+  <!-- idle 포즈. 털색 플레이스홀더: #FUR(세션 색), #FURDARK(어두운 털). -->
+  <g id="body">
+      <!-- 몸: 등이 살짝 솟은 웅크린 덩어리 -->
+      <path d="M14 50 C10 42 16 32 30 29 C44 26 58 32 60 44 C61 52 54 58 42 58 L22 58 C17 57 15 54 14 50 Z" fill="#FUR"/>
+      <!-- 가슴·앞다리 흰 패치 (머리 아래 왼쪽) -->
+      <path d="M18 48 C20 44 28 43 34 46 C36 50 34 56 30 57 L22 57 C18 56 17 52 18 48 Z" fill="#f3efe8"/>
+      <!-- 꼬리: 오른쪽 뒤에서 나와 앞 아래를 감싸 머리 쪽으로 -->
+      <path d="M58 46 C62 56 52 62.5 40 62 L27 61.5" fill="none" stroke="#FUR" stroke-width="6.5" stroke-linecap="round"/>
+      <path d="M31 61.6 L27 61.5" fill="none" stroke="#FURDARK" stroke-width="6" stroke-linecap="round"/>
+      <!-- 앞발 (흰) -->
+      <path d="M22 55 C22 52 27 52 30 53 C33 52 35 54 34 57 C33 59 23 59 22 55 Z" fill="#f3efe8"/>
+      <path d="M25.5 57.5 v1.2 M28 58 v1.2 M30.5 57.5 v1.2" fill="none" stroke="#221f22" stroke-width="0.7" stroke-linecap="round" opacity="0.4"/>
+      <!-- 귀 -->
+      <path d="M11 35 L10 24 L19 30 Z" fill="#FUR"/>
+      <path d="M22 31 L26 21 L30 30 Z" fill="#FUR"/>
+      <path d="M12.5 33 L12.5 27 L17.5 30.5 Z" fill="#e2a3a3"/>
+      <path d="M23.5 29.5 L26 24.5 L28.5 29.5 Z" fill="#e2a3a3"/>
+      <!-- 머리 (왼쪽 아래로 기울어 누움) -->
+      <path d="M7 42 C7 34 12 30 20 30 C28 30 33 35 32 42 C31 48 26 51 19 51 C12 51 7 48 7 42 Z" fill="#FUR"/>
+      <!-- 주둥이 흰 패치 -->
+      <path d="M10 44 C11 40 17 39 21 41 C23 44 22 49 18 50 C13 50 10 48 10 44 Z" fill="#f3efe8"/>
+      <!-- 감은 눈 -->
+      <path d="M12 40 q2.5 1.8 5 0 M20 39 q2.5 1.8 5 0" fill="none" stroke="#221f22" stroke-width="1" stroke-linecap="round" opacity="0.8"/>
+      <!-- 코·입 -->
+      <path d="M13 44.5 L16 44.5 L14.5 46.3 Z" fill="#d68f8f"/>
+      <path d="M14.5 46.3 q-1.5 1.5 -3 0.5" fill="none" stroke="#221f22" stroke-width="0.7" stroke-linecap="round" opacity="0.6"/>
+      <!-- 수염 -->
+      <path d="M11 46 L4 45 M11 47.5 L4 49" fill="none" stroke="#e8e4dc" stroke-width="0.7" stroke-linecap="round" opacity="0.85"/>
+  </g>
+</svg>
