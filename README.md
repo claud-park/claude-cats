@@ -3,6 +3,7 @@
 실행 중인 Claude Code 세션을 바탕화면 위(아이콘 아래) 고양이로 보여주는 macOS 앱.
 세션마다 고양이 한 마리, 서브에이전트마다 새끼 고양이 한 마리가 붙는다.
 busy 세션은 앉은 자세(꼬리가 1초마다 흔들린다), idle 세션은 웅크려 자는 자세다.
+[알림 연동](#알림-연동)을 켜면 사용자를 기다리는 세션은 세 번째 자세 + 노란 말풍선이 된다.
 
 <img width="455" height="148" alt="image" src="https://github.com/user-attachments/assets/17b9f98c-4ecb-4c4d-a30d-8c46edf44b02" />
 
@@ -25,6 +26,7 @@ open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 | `일시정지` / `재개` | 폴링·그리기 정지 |
 | `지금 새로고침` | 즉시 한 번 폴링 |
 | `디스플레이` | 고양이를 그릴 화면 선택 |
+| `알림 연동` | Claude Code 훅 설치/해제 (아래 참고) |
 | `로그인 시 시작` | 로그인 항목 등록/해제 |
 | `종료` | 앱 종료 |
 
@@ -33,6 +35,54 @@ open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 (`preferredDisplayName`) 에 저장한다 — 디스플레이 ID 는 재부팅·재연결마다 바뀌기 때문이다.
 고른 모니터를 뽑으면 자동으로 메인 디스플레이에 그리고, 메뉴에는 `<이름> (연결 안 됨)` 항목이
 체크된 채 남아 다시 꽂으면 그 화면으로 돌아간다. 하위 메뉴는 열 때마다 다시 만든다.
+
+## 알림 연동
+
+`~/.claude` 를 훑는 것만으로는 알 수 없는 두 가지가 있다 — **Claude 가 사용자를 기다리는 중인지**
+(권한 요청·입력 대기)와 **서브에이전트가 정확히 몇 개 도는지**다. 둘 다 Claude Code 훅이
+알려준다. 메뉴바의 `알림 연동` 을 켜면 앱이 훅을 깔고, 끄면 되돌린다.
+
+켜면 이렇게 된다.
+
+- 알림이 있는 세션은 **세 번째 자세(`alert`)** 로 바뀌고(자던 고양이도 깬다) 머리 위에 **노란
+  말풍선**이 뜬다: `권한 요청: <무엇을 하려는지>` / `입력 기다리는 중` / `에이전트 입력 대기`.
+  세션 제목 말풍선은 그동안 가려진다.
+- 새끼 고양이를 훅이 센 값과 합친다. idle 세션이어도 백그라운드 에이전트가 돌면 새끼가 붙고,
+  `SubagentStop` 을 받으면 파일 mtime 이 아무리 싱싱해도 사라진다.
+
+알림은 사용자가 답하면(`UserPromptSubmit`), 세션 상태가 바뀌면, 세션이 사라지면, 그리고
+안전망으로 30분이 지나면 사라진다.
+
+### 무엇을 어디에 쓰나
+
+| 경로 | 내용 |
+| --- | --- |
+| `~/Library/Application Support/ClaudeCats/claude-cats-hook.sh` | 훅 스크립트(755). stdin 을 파일 하나로 옮기고 끝난다 |
+| `~/.claude/settings.json` | 위 스크립트를 `Notification` · `SubagentStart` · `SubagentStop` · `UserPromptSubmit` 네 이벤트에 등록 (`timeout: 5`) |
+| `~/.claude/settings.json.claude-cats.bak` | 이 앱이 처음 쓰기 전 원본 백업(앱 실행당 한 번) |
+| `~/.claude/claude-cats/events/` | 훅이 떨구는 이벤트 파일. 앱이 읽자마자 지운다 |
+
+`Notification` 만 matcher 가 붙는다(`permission_prompt|idle_prompt|agent_needs_input`). 나머지
+셋은 빈 matcher(=전부)다. 훅 스크립트는 파일 하나 쓰고 **항상 exit 0** 이라 Claude 를 막지
+않는다. 임시 이름으로 받아 같은 디렉터리에서 rename 하므로 앱이 반쯤 쓰인 파일을 읽지 않는다.
+
+### 끄기
+
+메뉴에서 `알림 연동` 을 다시 누르면 된다 — `settings.json` 에서 **우리 command 를 가진 훅만**
+빼고, 그 때문에 비게 된 항목·이벤트 키도 정리한다. 다른 훅과 한 그룹에 섞여 있으면 우리 훅만
+빠지고 나머지는 그대로 남는다. 스크립트 파일과 이벤트 디렉터리는 지우지 않으므로, 지우고
+싶으면 위 두 경로를 직접 지운다.
+
+직접 손으로 되돌리려면 `settings.json` 의 네 이벤트에서 `claude-cats-hook.sh` 가 든 항목을
+지우거나, 백업(`settings.json.claude-cats.bak`)을 되돌리면 된다.
+
+### 서식 주의
+
+앱은 `settings.json` 을 JSON 으로 읽고 다시 쓴다. **내용(의미)은 그대로지만 서식은 다시
+짜진다** — 최상위 키가 알파벳 순으로 정렬되고, 들여쓰기는 2칸이 되며, 주석 없는 순수 JSON 이
+된다(원래도 JSON 이므로 주석은 애초에 못 쓴다). 값·배열 순서·중첩 구조는 바뀌지 않는다.
+설정 파일을 손으로 예쁘게 관리하고 있다면 이 점만 알고 켜면 된다. 파일이 JSON 으로 안 읽히면
+앱은 **아무것도 고치지 않고** 경고창만 띄운다.
 
 ## 동작 원리
 
@@ -67,7 +117,8 @@ Sources/ClaudeCats/CatArt.generated.swift   ← 생성물. 커밋은 한다
 1. Figma 에서 고양이를 그린다. 꼬리는 **프레임 이름을 `tail-a`** 로 둔다. 흔드는 두 번째
    프레임을 직접 그렸다면 그 이름은 `tail-b` 다(`<path>` 든 `<g>` 든 상관없다).
 2. Export SVG 에서 **"Include id attribute"** 를 켠다(이게 꺼져 있으면 꼬리를 못 찾는다).
-3. 파일을 `Design/cats/source/sitting-figma.svg` / `sleeping-figma.svg` 로 떨군다.
+3. 파일을 `Design/cats/source/sitting-figma.svg` / `sleeping-figma.svg` /
+   `alert-figma.svg` 로 떨군다.
 4. 아래를 돌린다.
 
 ```bash
@@ -77,6 +128,9 @@ python3 -m unittest scripts/test_import_cat_svg.py scripts/test_svg2swift.py
 
 털색 세 가지(`FUR` / `FUR_DARK` / `FUR_LIGHT`)의 **정본은 `scripts/generate-cat-art.sh`**
 맨 위에 있다. Figma 파일의 색을 바꾸면 거기만 고치면 된다.
+
+`alert.svg` 는 아직 없어도 된다 — 그러면 생성기가 앉은 자세를 `CatArt.alert*` 이름으로 그대로
+별칭 삼아, 런타임(`CatLayer`)이 참조하는 상수가 항상 존재한다.
 
 `generate-cat-art.sh` 는 `Design/cats/source/<포즈>-figma.svg` 가 있을 때만 import 를 돌린다.
 원본 없이 `Design/cats/*.svg` 를 손으로 그려 쓰는 예전 방식도 되지만, 그때
@@ -122,6 +176,7 @@ stderr 에 찍는다(`path 번호`, 색, bbox, `d` 앞 40자).
 | `Design/cats/source/*-figma.svg` | 원본. 여기만 사람이 고친다 |
 | `Design/cats/sitting.svg` | busy 포즈(생성물). `<g id="tail-a">`, `<g id="tail-b">` 는 1초마다 번갈아 보이는 꼬리 두 프레임, 그 외 전부 몸통 |
 | `Design/cats/sleeping.svg` | idle 포즈(생성물). 꼬리를 포함해 전부 몸통(정지 그림) |
+| `Design/cats/alert.svg` | 사용자 입력을 기다릴 때 쓰는 세 번째 포즈(생성물). 꼬리 처리는 `sitting.svg` 와 같다 |
 
 - `viewBox` 는 필수다. `viewBox="0 0 64 64"` 를 권한다. 다른 크기를 주면 64×64 상자에
   균일 비율로 맞춰 가운데 정렬한다(선 두께도 같이 스케일된다).
@@ -130,7 +185,7 @@ stderr 에 찍는다(`path 번호`, 색, bbox, `d` 앞 40자).
 - 꼬리도 **문서 순서를 따른다**. `tail-a` 가 몸통보다 뒤에 있으면 꼬리를 몸통 위에 얹고,
   앞에 있으면 뒤에 깐다. 변환기가 `CatArt.sittingTailAboveBody` 로 내보내고 런타임이
   꼬리 그릇 레이어 순서를 거기에 맞춘다.
-- 말풍선 꼭지 높이도 그림에서 잰다 — 변환기가 `CatArt.sittingTop` / `sleepingTop`
+- 말풍선 꼭지 높이도 그림에서 잰다 — 변환기가 `CatArt.sittingTop` / `sleepingTop` / `alertTop`
   (그림 꼭대기 y)을 내보내고, 런타임은 그 2pt 위에 꼭지를 둔다.
 
 ### 색
