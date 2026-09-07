@@ -5,6 +5,7 @@ import Foundation
 @Suite struct StateCollectorAlertTests {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
     let cwd = "/Users/me/proj_x"
+    let encoded = "-Users-me-proj-x"
 
     func makeFS(status: String = "idle") -> FakeFileSystem {
         let fs = FakeFileSystem()
@@ -61,14 +62,69 @@ import Foundation
         #expect(alert?.kind == .permission && alert?.message == "second")
     }
 
-    /// 파일 이름 순서가 곧 처리 순서다. 10 < 9 이므로 "9-…" 가 나중이다.
-    @Test func eventsAreProcessedInFilenameOrder() {
+    /// mtime 이 같으면 파일 이름이 동점 처리다. 10 < 9 이므로 "9-…" 가 나중이다.
+    @Test func eventsWithTheSameMtimeFallBackToFilenameOrder() {
         let fs = makeFS()
         addEvent(fs, "10", Fixtures.notification(type: "permission_prompt", message: "first"))
         addEvent(fs, "9", Fixtures.notification(type: "idle_prompt", message: "second"))
         let alert = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
             .collect(now: now).sessions[0].alert
         #expect(alert?.kind == .idle && alert?.message == "second")
+    }
+
+    /// 파일 이름의 타임스탬프는 초 단위라 같은 초 안에서는 순서를 못 정한다.
+    /// mtime(APFS 는 나노초)이 1순위여야 한다 — 이름 순으로는 "second" 가 먼저다.
+    @Test func mtimeBeatsFilenameOrder() {
+        let system = makeFS()      // 이름 순으로는 "1-a" < "2-b" 라 반대 결과가 나온다
+        system.add(Fixtures.eventPath("2-b"),
+                   Fixtures.notification(type: "permission_prompt", message: "older"),
+                   modified: now.addingTimeInterval(-2))
+        system.add(Fixtures.eventPath("1-a"),
+                   Fixtures.notification(type: "idle_prompt", message: "newer"),
+                   modified: now.addingTimeInterval(-1))
+        let alert = StateCollector(fileSystem: system, claudeDir: Fixtures.claudeDir)
+            .collect(now: now).sessions[0].alert
+        #expect(alert?.kind == .idle && alert?.message == "newer")
+    }
+
+    /// 앱이 꺼져 있는 동안 훅은 계속 쌓는다. 한 틱에 다 삼키면 폴링이 길어진다.
+    @Test func atMostOneCapWorthOfEventsPerTick() {
+        let fs = makeFS()
+        let total = StateCollector.eventsPerTick + 30
+        for i in 0..<total {
+            fs.add(Fixtures.eventPath(String(format: "%05d", i)),
+                   Fixtures.hookEvent("UserPromptSubmit"),
+                   modified: now.addingTimeInterval(Double(i)))
+        }
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        _ = c.collect(now: now)
+        #expect(fs.removed.count == StateCollector.eventsPerTick)
+        // 오래된 것부터 먹는다.
+        #expect(fs.removed.first == Fixtures.eventPath("00000"))
+        _ = c.collect(now: now.addingTimeInterval(3))
+        #expect(fs.removed.count == total)          // 나머지는 다음 틱에
+    }
+
+    /// 지우기에 실패한 파일은 매 틱 다시 만난다. 내용을 두 번 적용하면 안 된다.
+    @Test func undeletableEventIsNotAppliedTwice() {
+        let fs = makeFS()
+        let path = addEvent(fs, "1", Fixtures.notification(type: "idle_prompt", message: "x"))
+        fs.failRemoves = [path]
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+        #expect(c.processedEvents == [path])
+
+        // 두 번째 틱: 파일은 아직 있지만 다시 읽지도, 다시 적용하지도 않는다.
+        addEvent(fs, "2", Fixtures.hookEvent("UserPromptSubmit"))
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert == nil)
+        #expect(fs.readCount[path] == 1)
+        // 세 번째 틱에서도 알림이 되살아나지 않는다.
+        #expect(c.collect(now: now.addingTimeInterval(6)).sessions[0].alert == nil)
+
+        // 지워지면 기억에서도 빠진다.
+        fs.failRemoves = []
+        _ = c.collect(now: now.addingTimeInterval(9))
+        #expect(c.processedEvents.isEmpty)
     }
 
     // MARK: - 파일 청소
@@ -132,19 +188,69 @@ import Foundation
         #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert == nil)
     }
 
-    @Test func statusChangeClearsTheAlert() {
-        let fs = makeFS(status: "idle")
+    /// 세션 상태를 바꾼다(파일을 다시 써서 mtime 도 같이 올린다).
+    func setStatus(_ fs: FakeFileSystem, _ status: String, at: Date) {
+        fs.add(Fixtures.sessionPath(pid: 10),
+               Fixtures.sessionJSON(pid: 10, id: "sess", name: "a", cwd: cwd, status: status),
+               modified: at)
+    }
+
+    /// 권한을 승인하면 Claude 가 도구를 돌리고 transcript 에 append 한다 — 제일 정확한 신호다.
+    @Test func transcriptWriteAfterTheAlertClearsIt() {
+        let fs = makeFS(status: "busy")
+        let transcript = Fixtures.transcriptPath(encodedCwd: encoded, sessionId: "sess")
+        fs.add(transcript, Fixtures.titleLine("t") + "\n", modified: now.addingTimeInterval(-5))
         addEvent(fs, "1", Fixtures.notification(type: "permission_prompt", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+        // transcript 가 그대로면 계속 기다리는 중이다.
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert != nil)
+
+        fs.touch(transcript, modified: now.addingTimeInterval(4))
+        #expect(c.collect(now: now.addingTimeInterval(6)).sessions[0].alert == nil)
+    }
+
+    /// idle → busy 는 새 작업이 시작됐다는 뜻이라 알림을 지운다.
+    @Test func idleToBusyTransitionClearsTheAlert() {
+        let fs = makeFS(status: "idle")
+        addEvent(fs, "1", Fixtures.notification(type: "idle_prompt", message: "x"))
         let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
         #expect(c.collect(now: now).sessions[0].alert != nil)
         // 같은 상태로 한 틱 더 — 그대로 남는다.
         #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert != nil)
 
         let later = now.addingTimeInterval(6)
-        fs.add(Fixtures.sessionPath(pid: 10),
-               Fixtures.sessionJSON(pid: 10, id: "sess", name: "a", cwd: cwd, status: "busy"),
-               modified: later)
+        setStatus(fs, "busy", at: later)
         #expect(c.collect(now: later).sessions[0].alert == nil)
+    }
+
+    /// busy → idle 은 지우지 않는다. 권한 프롬프트가 떠 있는 동안 세션이 idle 로 넘어가는 건
+    /// 정상이고, 그걸로 지우면 알림이 뜨자마자 사라진다.
+    @Test func busyToIdleBlipDoesNotClearTheAlert() {
+        let fs = makeFS(status: "busy")
+        addEvent(fs, "1", Fixtures.notification(type: "idle_prompt", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+
+        setStatus(fs, "idle", at: now.addingTimeInterval(3))
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert != nil)
+        #expect(c.collect(now: now.addingTimeInterval(6)).sessions[0].alert != nil)
+
+        addEvent(fs, "2", Fixtures.hookEvent("UserPromptSubmit"))
+        #expect(c.collect(now: now.addingTimeInterval(9)).sessions[0].alert == nil)
+    }
+
+    /// 서브에이전트가 입력을 기다리는 동안 본 대화(main turn)가 끝나 busy → idle 이 되어도
+    /// 알림은 남아야 한다 — 기다리는 건 에이전트지 본 대화가 아니다.
+    @Test func agentNeedsInputSurvivesTheMainTurnEnding() {
+        let fs = makeFS(status: "busy")
+        addEvent(fs, "1", Fixtures.notification(type: "agent_needs_input", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert?.kind == .agentNeedsInput)
+
+        setStatus(fs, "idle", at: now.addingTimeInterval(3))
+        #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert?.kind == .agentNeedsInput)
+        #expect(c.collect(now: now.addingTimeInterval(60)).sessions[0].alert?.kind == .agentNeedsInput)
     }
 
     @Test func alertExpiresAfterTTL() {

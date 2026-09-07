@@ -112,6 +112,63 @@ import Foundation
         #expect(fs.readCount["\(dir)/agent-scanned.meta.json"] == nil)
     }
 
+    // MARK: - id 는 transcript 경로에서 뽑는다
+
+    /// 훅의 `agent_id` 가 파일 이름의 `<id>` 와 다를 수 있다. 경로 쪽을 정본으로 쓰지 않으면
+    /// 한 에이전트가 새끼 두 마리가 되고 Stop 억제도 빗나간다.
+    @Test func kittenIdComesFromTheTranscriptPathNotAgentId() {
+        let fs = makeFS()
+        addScannedAgent(fs, id: "file-id", ago: 1)
+        addEvent(fs, "1", Fixtures.subagentEvent("SubagentStart", agentId: "totally-different",
+                                                 agentType: "hooked", transcriptId: "file-id"))
+        let subs = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+            .collect(now: now).sessions[0].subagents
+        #expect(subs.map(\.id) == ["file-id"])       // 두 마리가 아니라 한 마리
+        #expect(subs[0].description == "hooked")
+    }
+
+    @Test func stopSuppressesUsingTheTranscriptId() {
+        let fs = makeFS()
+        addScannedAgent(fs, id: "file-id", ago: 1)
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].subagents.map(\.id) == ["file-id"])
+
+        addEvent(fs, "2", Fixtures.subagentEvent("SubagentStop", agentId: "totally-different",
+                                                 transcriptId: "file-id"))
+        #expect(c.collect(now: now.addingTimeInterval(1)).sessions[0].subagents.isEmpty)
+        #expect(c.stoppedAgents["sess"] == ["file-id"])
+    }
+
+    /// transcript 경로가 없는 페이로드는 `agent_id` 로 떨어진다.
+    @Test func agentIdIsTheFallbackWhenNoTranscriptPath() {
+        let fs = makeFS()
+        addEvent(fs, "1", Fixtures.subagentEvent("SubagentStart", agentId: "only-agent-id"))
+        #expect(StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+            .collect(now: now).sessions[0].subagents.map(\.id) == ["only-agent-id"])
+    }
+
+    @Test func transcriptIdStripsTheAgentPrefixLikeTheScan() {
+        #expect(StateCollector.subagentId(
+            fromTranscript: URL(fileURLWithPath: "/p/subagents/agent-abc123.jsonl")) == "abc123")
+        // 접두어가 없으면 파일 이름 그대로.
+        #expect(StateCollector.subagentId(
+            fromTranscript: URL(fileURLWithPath: "/p/subagents/plain.jsonl")) == "plain")
+    }
+
+    // MARK: - 안전망
+
+    /// Stop 을 놓쳐도(Claude 가 죽거나 훅이 실패하거나) 새끼가 영영 남지는 않는다.
+    @Test func hookAgentExpiresAfterItsTTL() {
+        let fs = makeFS()
+        addEvent(fs, "1", Fixtures.subagentEvent("SubagentStart", agentId: "a1"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].subagents.map(\.id) == ["a1"])
+        // 4시간 직전까지는 산다 — 서브에이전트는 오래 돌기도 한다.
+        #expect(c.collect(now: now.addingTimeInterval(4 * 3600 - 1)).sessions[0].subagents.map(\.id) == ["a1"])
+        #expect(c.collect(now: now.addingTimeInterval(4 * 3600)).sessions[0].subagents.isEmpty)
+        #expect(c.hookAgents["sess"] == nil)
+    }
+
     // MARK: - 청소
 
     @Test func hookAgentsArePrunedWhenTheSessionDisappears() {
@@ -151,7 +208,9 @@ import Foundation
                      Fixtures.subagentEvent("SubagentStop", agentId: "a\(i)"))
         }
         let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        // 한 틱에 eventsPerTick 개만 삼키므로 두 틱 돌려야 다 들어간다.
         _ = c.collect(now: now)
+        _ = c.collect(now: now.addingTimeInterval(3))
         let stopped = c.stoppedAgents["sess"] ?? []
         #expect(stopped.count == StateCollector.stoppedAgentLimit)
         #expect(stopped.last == "a\(StateCollector.stoppedAgentLimit + 9)")   // 최근 것이 남는다

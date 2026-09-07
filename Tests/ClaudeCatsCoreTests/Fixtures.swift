@@ -68,10 +68,15 @@ enum Fixtures {
                   extra: #""notification_type":"\#(type)","message":"\#(message)""#)
     }
 
+    /// 실제 훅 페이로드는 `agent_id` 와 transcript 경로를 **둘 다** 준다. 새끼 id 의 정본은
+    /// 경로 쪽이므로(`agent-<id>.jsonl`) 테스트에서도 둘을 따로 줄 수 있게 한다.
     static func subagentEvent(_ event: String, agentId: String, agentType: String = "fork",
-                              sessionId: String = "sess") -> String {
-        hookEvent(event, sessionId: sessionId,
-                  extra: #""agent_id":"\#(agentId)","agent_type":"\#(agentType)""#)
+                              sessionId: String = "sess", transcriptId: String? = nil) -> String {
+        var extra = #""agent_id":"\#(agentId)","agent_type":"\#(agentType)""#
+        if let transcriptId {
+            extra += #","agent_transcript_path":"/home/.claude/projects/p/\#(sessionId)/subagents/agent-\#(transcriptId).jsonl""#
+        }
+        return hookEvent(event, sessionId: sessionId, extra: extra)
     }
 
     static func metaJSON(description: String) -> String {
