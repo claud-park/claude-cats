@@ -5,8 +5,10 @@ import Foundation
 @Suite struct SceneTests {
     let screen = CGSize(width: 1440, height: 900)   // slotCount = 10
 
-    func session(_ name: String, status: Status = .idle, subagents: [Subagent] = []) -> Session {
-        Session(id: "id-\(name)", pid: 1, name: name, cwd: "/", status: status, subagents: subagents)
+    func session(_ name: String, status: Status = .idle, subagents: [Subagent] = [],
+                 title: String? = nil) -> Session {
+        Session(id: "id-\(name)", pid: 1, name: name, cwd: "/", status: status,
+                subagents: subagents, title: title)
     }
 
     func sub(_ id: String) -> Subagent {
@@ -83,6 +85,22 @@ import Foundation
         let kittens = l.cats.filter { $0.id.hasPrefix("id-p/") }
         #expect(kittens.count == 3)
         #expect(kittens.map(\.overflowCount) == [0, 0, 2])
+    }
+
+    @Test func sessionTitleBecomesBubbleAndKittensHaveNone() {
+        let l = layout([session("p", status: .busy, subagents: [sub("k1")], title: "wallpaper app")])
+        #expect(l.cats.first { $0.id == "id-p" }?.bubble == "wallpaper app")
+        #expect(l.cats.first { $0.id == "id-p/k1" }?.bubble == nil)
+    }
+
+    @Test func missingOrEmptyTitleGivesNoBubble() {
+        let l = layout([session("none"), session("empty", title: "")])
+        #expect(l.cats.first { $0.id == "id-none" }?.bubble == nil)
+        #expect(l.cats.first { $0.id == "id-empty" }?.bubble == nil)
+    }
+
+    @Test func bubbleChangeChangesLayoutEquality() {
+        #expect(layout([session("a", title: "one")]) != layout([session("a", title: "two")]))
     }
 
     @Test func paletteIndexWithinRangeAndStable() {

@@ -15,9 +15,11 @@ public struct CatPlacement: Sendable, Equatable, Identifiable {
     public var label: String?
     public var animated: Bool
     public var overflowCount: Int
+    /// 머리 위 말풍선 문구(세션 제목). 새끼와 제목 없는 세션은 nil.
+    public var bubble: String?
 
     public init(id: String, origin: CGPoint, scale: CGFloat, pose: Pose, paletteIndex: Int,
-                label: String?, animated: Bool, overflowCount: Int) {
+                label: String?, animated: Bool, overflowCount: Int, bubble: String? = nil) {
         self.id = id
         self.origin = origin
         self.scale = scale
@@ -26,6 +28,7 @@ public struct CatPlacement: Sendable, Equatable, Identifiable {
         self.label = label
         self.animated = animated
         self.overflowCount = overflowCount
+        self.bubble = bubble
     }
 }
 
@@ -73,10 +76,12 @@ public enum Scene {
             let paletteIndex = Int(hash % UInt64(config.paletteSize))
             let pose: Pose = session.status == .busy ? .sitting : .sleeping
 
+            let title = session.title.flatMap { $0.isEmpty ? nil : $0 }
             cats.append(CatPlacement(
                 id: session.id, origin: origin, scale: 1, pose: pose,
                 paletteIndex: paletteIndex, label: session.name,
-                animated: pose == .sitting && animationsEnabled, overflowCount: 0
+                animated: pose == .sitting && animationsEnabled, overflowCount: 0,
+                bubble: title
             ))
 
             let shown = session.subagents.prefix(config.maxKittens)
