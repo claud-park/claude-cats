@@ -1,18 +1,38 @@
 import AppKit
 import ClaudeCatsCore
 
+/// backing scale 이 바뀌면 알려주는 layer-hosting 콘텐츠 뷰.
+/// 화면 파라미터 알림 없이 스케일만 바뀌는 경우(창이 다른 배율 디스플레이로 옮겨감)를 잡는다.
+private final class DesktopContentView: NSView {
+    var onBackingPropertiesChanged: (() -> Void)?
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        onBackingPropertiesChanged?()
+    }
+}
+
 /// 바탕화면 위·아이콘 아래 투명 창. 레이어 diff 만 반영하고 60fps 루프는 없다.
 @MainActor
 final class DesktopWindow {
     private let window: NSWindow
+    private let contentView: DesktopContentView
     private let rootLayer = CALayer()
     private var layers: [String: CatLayer] = [:]
     private var layout = Layout(cats: [])
     private var tailTimer: DispatchSourceTimer?
+    private var isRefitting = false
+
+    /// 스펙의 "메인 디스플레이" = 원점을 포함한 주 디스플레이(`screens.first`).
+    /// `NSScreen.main` 은 키보드 포커스가 있는 화면이라 다르다 — 포커스 따라 고양이가 옮겨다닌다.
+    private static var mainDisplay: NSScreen? { NSScreen.screens.first ?? NSScreen.main }
 
     init() {
-        let screen = NSScreen.main ?? NSScreen.screens[0]
-        window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        let screen = Self.mainDisplay
+        let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let scale = screen?.backingScaleFactor ?? 2
+
+        window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
@@ -21,20 +41,32 @@ final class DesktopWindow {
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
-        let view = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        rootLayer.contentsScale = screen.backingScaleFactor
-        view.layer = rootLayer          // layer-hosting: wantsLayer 보다 먼저 대입
-        view.wantsLayer = true
-        window.contentView = view
+        contentView = DesktopContentView(frame: NSRect(origin: .zero, size: frame.size))
+        rootLayer.contentsScale = scale
+        contentView.layer = rootLayer   // layer-hosting: wantsLayer 보다 먼저 대입
+        contentView.wantsLayer = true
+        window.contentView = contentView
         window.orderFrontRegardless()
+
+        // 모든 저장 프로퍼티가 채워진 뒤라야 self 를 캡처할 수 있다.
+        contentView.onBackingPropertiesChanged = { [weak self] in self?.refitToScreen() }
     }
 
     var screenSize: CGSize { window.frame.size }
 
     func refitToScreen() {
-        let screen = NSScreen.main ?? NSScreen.screens[0]
+        // setFrame 이 viewDidChangeBackingProperties 를 다시 부를 수 있어 재진입을 막는다.
+        guard !isRefitting, let screen = Self.mainDisplay else { return }
+        isRefitting = true
+        defer { isRefitting = false }
+
         window.setFrame(screen.frame, display: true)
-        rootLayer.contentsScale = screen.backingScaleFactor
+        let scale = screen.backingScaleFactor
+        rootLayer.contentsScale = scale
+        // 이미 만들어진 고양이들은 생성 시점 스케일을 들고 있으므로 같이 내려준다.
+        for layer in layers.values {
+            layer.setContentsScale(scale)
+        }
     }
 
     func apply(_ new: Layout) {

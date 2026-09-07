@@ -13,6 +13,8 @@ final class CatLayer: CALayer {
     private let labelLayer = CATextLayer()
     private let badgeLayer = CATextLayer()
     private var tailToggle = false
+    /// 최초 apply 는 모든 서브레이어를 채워야 한다. 이후로는 바뀐 것만 건드린다.
+    private var hasApplied = false
 
     init(placement: CatPlacement, contentsScale: CGFloat) {
         self.placement = placement
@@ -56,34 +58,61 @@ final class CatLayer: CALayer {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// 바뀐 프로퍼티만 다시 쓴다. 경로 생성과 문자열 조판이 제일 비싸므로
+    /// pose / paletteIndex / label / overflowCount 가 실제로 달라졌을 때만 손댄다.
     func apply(_ p: CatPlacement) {
+        let previous = placement
+        let first = !hasApplied
+        hasApplied = true
         placement = p
+
+        // 위치·크기는 매번 싼 값 대입이라 조건 없이 쓴다.
         position = p.origin
         transform = CATransform3DMakeScale(p.scale, p.scale, 1)
 
-        let color = CatShapes.palette[p.paletteIndex % CatShapes.palette.count].cgColor
-        bodyLayer.path = CatShapes.body(p.pose)
-        bodyLayer.fillColor = color
+        let poseChanged = first || p.pose != previous.pose
+        let colorChanged = first || p.paletteIndex != previous.paletteIndex
 
-        eyesLayer.path = CatShapes.eyes(p.pose)
-        eyesLayer.fillColor = p.pose == .sitting ? CatShapes.eyeColor.cgColor : nil
-        eyesLayer.strokeColor = p.pose == .sleeping ? CatShapes.eyeColor.cgColor : nil
+        if poseChanged {
+            bodyLayer.path = CatShapes.body(p.pose)
+            eyesLayer.path = CatShapes.eyes(p.pose)
+            eyesLayer.fillColor = p.pose == .sitting ? CatShapes.eyeColor.cgColor : nil
+            eyesLayer.strokeColor = p.pose == .sleeping ? CatShapes.eyeColor.cgColor : nil
 
-        tailA.path = CatShapes.tail(p.pose, frame: 0)
-        tailB.path = CatShapes.tail(p.pose, frame: 1)
-        tailA.strokeColor = color
-        tailB.strokeColor = color
-        tailToggle = false
-        tailA.isHidden = false
-        tailB.isHidden = true
+            tailA.path = CatShapes.tail(p.pose, frame: 0)
+            tailB.path = CatShapes.tail(p.pose, frame: 1)
+            tailToggle = false
+            tailA.isHidden = false
+            tailB.isHidden = true
+        }
 
-        labelLayer.string = p.label.map { Self.outlinedLabel($0, maxWidth: labelLayer.bounds.width) }
-        labelLayer.isHidden = p.label == nil
+        if colorChanged || poseChanged {
+            let color = CatShapes.palette[p.paletteIndex % CatShapes.palette.count].cgColor
+            bodyLayer.fillColor = color
+            tailA.strokeColor = color
+            tailB.strokeColor = color
+        }
 
-        badgeLayer.string = p.overflowCount > 0
-            ? Self.outlinedLabel("+\(p.overflowCount)", maxWidth: badgeLayer.bounds.width)
-            : nil
-        badgeLayer.isHidden = p.overflowCount == 0
+        if first || p.label != previous.label {
+            labelLayer.string = p.label.map { Self.outlinedLabel($0, maxWidth: labelLayer.bounds.width) }
+            labelLayer.isHidden = p.label == nil
+        }
+
+        if first || p.overflowCount != previous.overflowCount {
+            badgeLayer.string = p.overflowCount > 0
+                ? Self.outlinedLabel("+\(p.overflowCount)", maxWidth: badgeLayer.bounds.width)
+                : nil
+            badgeLayer.isHidden = p.overflowCount == 0
+        }
+    }
+
+    /// 디스플레이 backing scale 이 바뀌면 자신과 모든 서브레이어에 새 스케일을 내린다.
+    func setContentsScale(_ scale: CGFloat) {
+        guard contentsScale != scale else { return }
+        contentsScale = scale
+        for sublayer in sublayers ?? [] {
+            sublayer.contentsScale = scale
+        }
     }
 
     func tickTail() {

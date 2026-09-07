@@ -2,12 +2,31 @@ import AppKit
 import ClaudeCatsCore
 import os
 
+/// 변화 없는 폴링이 메인 큐를 깨우지 않게 막는 문지기.
+/// 모든 접근은 AppController 의 collector 큐 위에서만 일어난다 — 그래서 `@unchecked Sendable`.
+private final class SnapshotGate: @unchecked Sendable {
+    private var last: Snapshot?
+
+    /// 직전에 보낸 것과 다를 때만 true. collector 큐에서만 호출할 것.
+    func shouldSend(_ snapshot: Snapshot) -> Bool {
+        guard snapshot != last else { return false }
+        last = snapshot
+        return true
+    }
+
+    /// 게이트를 우회해 보낼 때 상태만 맞춰둔다. collector 큐에서만 호출할 것.
+    func record(_ snapshot: Snapshot) {
+        last = snapshot
+    }
+}
+
 /// 폴링 타이머를 돌리고 Snapshot → Layout → 창 반영을 잇는다.
 @MainActor
 final class AppController {
     private let collector: StateCollector
     private let window: DesktopWindow
     private let queue = DispatchQueue(label: "claude-cats.collector", qos: .utility)
+    private let gate = SnapshotGate()
     private let log = Logger(subsystem: "claude-cats", category: "controller")
     private var timer: DispatchSourceTimer?
     private var mode: PollingMode = .suspended
@@ -41,8 +60,10 @@ final class AppController {
         )
         // @Sendable 를 명시하지 않으면 클로저가 MainActor 격리를 상속받아
         // utility 큐에서 실행될 때 Swift 6 격리 검사가 트랩한다.
-        source.setEventHandler { @Sendable [collector, weak self] in
+        source.setEventHandler { @Sendable [collector, gate, weak self] in
             let snapshot = Self.collectTimed(collector)
+            // 변화 판정을 collector 큐에서 끝내서, 안 바뀌었으면 메인 큐를 아예 깨우지 않는다.
+            guard gate.shouldSend(snapshot) else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.handle(snapshot) }
             }
@@ -52,9 +73,12 @@ final class AppController {
         pollNow()
     }
 
+    /// 수동 갱신. 게이트를 우회해 항상 메인으로 넘긴다(모드 전환·"지금 새로고침" 용).
+    /// 최종 렌더 여부는 메인의 `handle(_:)` 이 판단한다.
     func pollNow() {
-        queue.async { @Sendable [collector, weak self] in
+        queue.async { @Sendable [collector, gate, weak self] in
             let snapshot = Self.collectTimed(collector)
+            gate.record(snapshot)   // 우회하더라도 게이트 상태는 맞춰둔다
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.handle(snapshot) }
             }
