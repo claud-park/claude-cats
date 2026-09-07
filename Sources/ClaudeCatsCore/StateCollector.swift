@@ -182,6 +182,8 @@ public final class StateCollector: @unchecked Sendable {
         }
         guard let data = try? fs.readTail(transcript, maxBytes: Self.titleTailBytes) else {
             log.warning("tail read failed: \(transcript.path, privacy: .public)")
+            // 실패도 캐시에 기록해야 매 틱 재시도를 막는다(스로틀은 성공·실패 공통).
+            titleCache[session.id] = (st.modified, now, cached?.title)
             return cached?.title
         }
         // 꼬리에 제목 줄이 없을 수 있다(긴 작업 중). 그럴 땐 이전 제목을 유지한다.

@@ -6,6 +6,8 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
     private var files: [String: (data: Data, modified: Date)] = [:]
     var alivePids: Set<Int32> = []
     var readCount: [String: Int] = [:]
+    /// 이 경로들의 read/readTail 은 던진다(권한 오류·경합 시뮬레이션). 시도 횟수는 센다.
+    var failReads: Set<String> = []
 
     func add(_ path: String, _ text: String, modified: Date) {
         files[path] = (Data(text.utf8), modified)
@@ -46,12 +48,14 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
 
     func read(_ url: URL) throws -> Data {
         readCount[url.path, default: 0] += 1
+        guard !failReads.contains(url.path) else { throw CocoaError(.fileReadNoPermission) }
         guard let f = files[url.path] else { throw CocoaError(.fileReadNoSuchFile) }
         return f.data
     }
 
     func readTail(_ url: URL, maxBytes: Int) throws -> Data {
         readCount[url.path, default: 0] += 1
+        guard !failReads.contains(url.path) else { throw CocoaError(.fileReadNoPermission) }
         guard let f = files[url.path] else { throw CocoaError(.fileReadNoSuchFile) }
         return f.data.count > maxBytes ? f.data.suffix(maxBytes) : f.data
     }

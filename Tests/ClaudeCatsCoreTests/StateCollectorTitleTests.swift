@@ -81,6 +81,30 @@ import Foundation
         #expect(fs.readCount[transcript] == 2)
     }
 
+    /// 읽기가 실패해도 매 틱 재시도하면 안 된다. 실패도 10초 스로틀을 탄다.
+    @Test func failedTailReadIsThrottledAndKeepsPreviousTitle() {
+        let fs = makeFS()
+        fs.add(transcript, Fixtures.messageLine("x") + "\n" + Fixtures.titleLine("A") + "\n", modified: now)
+        let c = collector(fs)
+        #expect(c.collect(now: now).sessions[0].title == "A")
+        #expect(fs.readCount[transcript] == 1)
+
+        // 이제부터 읽기가 계속 실패한다(권한 오류 등).
+        fs.failReads.insert(transcript)
+        fs.touch(transcript, modified: now.addingTimeInterval(11))
+        #expect(c.collect(now: now.addingTimeInterval(12)).sessions[0].title == "A")
+        #expect(fs.readCount[transcript] == 2)
+
+        // 실패 직후 1초 뒤 — 다시 시도하지 않는다.
+        #expect(c.collect(now: now.addingTimeInterval(13)).sessions[0].title == "A")
+        #expect(fs.readCount[transcript] == 2)
+
+        // mtime 이 또 바뀌고 10초가 지나야 비로소 한 번 더 시도한다.
+        fs.touch(transcript, modified: now.addingTimeInterval(23))
+        #expect(c.collect(now: now.addingTimeInterval(24)).sessions[0].title == "A")
+        #expect(fs.readCount[transcript] == 3)
+    }
+
     @Test func idleSessionsGetTitlesToo() {
         let fs = makeFS(status: "idle")
         fs.add(transcript, Fixtures.messageLine("x") + "\n" + Fixtures.titleLine("zzz") + "\n", modified: now)
