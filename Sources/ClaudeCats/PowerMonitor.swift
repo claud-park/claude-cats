@@ -97,7 +97,7 @@ final class PowerMonitor {
         on(dc, Notification.Name("com.apple.screenIsLocked")) { $0.screenLocked = true }
         on(dc, Notification.Name("com.apple.screenIsUnlocked"), refreshPower: true) { $0.screenLocked = false }
         on(dc, Notification.Name("com.apple.screensaver.didstart")) { $0.screenLocked = true }
-        on(dc, Notification.Name("com.apple.screensaver.didstop")) { $0.screenLocked = false }
+        on(dc, Notification.Name("com.apple.screensaver.didstop"), refreshPower: true) { $0.screenLocked = false }
         on(nc, .NSProcessInfoPowerStateDidChange) { $0.lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled }
     }
 }

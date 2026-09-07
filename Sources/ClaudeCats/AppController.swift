@@ -2,50 +2,15 @@ import AppKit
 import ClaudeCatsCore
 import os
 
-/// 변화 없는 폴링이 메인 큐를 깨우지 않게 막는 문지기.
-/// 모든 접근은 AppController 의 collector 큐 위에서만 일어난다 — 그래서 `@unchecked Sendable`.
-private final class SnapshotGate: @unchecked Sendable {
-    private var last: Snapshot?
-
-    /// 직전에 보낸 것과 다를 때만 true. collector 큐에서만 호출할 것.
-    func shouldSend(_ snapshot: Snapshot) -> Bool {
-        guard snapshot != last else { return false }
-        last = snapshot
-        return true
-    }
-
-    /// 게이트를 우회해 보낼 때 상태만 맞춰둔다. collector 큐에서만 호출할 것.
-    func record(_ snapshot: Snapshot) {
-        last = snapshot
-    }
-}
-
-/// 전원 소스(배터리/AC)가 바뀐 틱만 골라내는 문지기.
-/// SnapshotGate 와 같은 규칙 — collector 큐에서만 접근한다.
-private final class PowerSourceGate: @unchecked Sendable {
-    private var last: Bool?
-
-    /// 직전 틱과 다를 때만 true. collector 큐에서만 호출할 것.
-    func shouldSend(_ onBattery: Bool) -> Bool {
-        guard onBattery != last else { return false }
-        last = onBattery
-        return true
-    }
-
-    /// 기억을 비워 다음 틱을 무조건 통과시킨다. collector 큐에서만 호출할 것.
-    func reset() {
-        last = nil
-    }
-}
-
 /// 폴링 타이머를 돌리고 Snapshot → Layout → 창 반영을 잇는다.
 @MainActor
 final class AppController {
     private let collector: StateCollector
     private let window: DesktopWindow
     private let queue = DispatchQueue(label: "claude-cats.collector", qos: .utility)
-    private let gate = SnapshotGate()
-    private let powerGate = PowerSourceGate()
+    /// 둘 다 collector 큐에서만 만진다(ChangeGate 는 직렬 큐 전용).
+    private let gate = ChangeGate<Snapshot>()
+    private let powerGate = ChangeGate<Bool>()
     private let log = Logger(subsystem: "claude-cats", category: "controller")
     private var timer: DispatchSourceTimer?
     private var mode: PollingMode = .suspended
@@ -64,6 +29,10 @@ final class AppController {
     init(collector: StateCollector, window: DesktopWindow) {
         self.collector = collector
         self.window = window
+    }
+
+    deinit {
+        timer?.cancel()
     }
 
     func setMode(_ newMode: PollingMode) {
@@ -142,6 +111,9 @@ final class AppController {
     }
 
     private func handle(_ snapshot: Snapshot) {
+        // 타이머 취소와 메인 큐 도착 사이에 낀 틱. 정지 상태에서 다시 그리면
+        // 잠금·슬립 중에 창을 건드린다. 버리면 된다 — 재개할 때 setMode 가 pollNow 를 부른다.
+        guard mode != .suspended else { return }
         guard snapshot != lastSnapshot || lastAnimationsEnabled != mode.animationsEnabled else { return }
         render(snapshot)
     }

@@ -21,7 +21,12 @@ final class StatusMenu: NSObject {
 
         let image = NSImage(systemSymbolName: "cat", accessibilityDescription: "Claude Cats")
             ?? NSImage(systemSymbolName: "pawprint", accessibilityDescription: "Claude Cats")
-        item.button?.image = image
+        if let image {
+            item.button?.image = image
+        } else {
+            // 두 심볼 다 없는 OS 라면 이미지 없이 빈 칸만 남는다 — 누를 수 있게 글자를 넣는다.
+            item.button?.title = "🐱"
+        }
 
         let menu = NSMenu()
         // 기본값(true)이면 AppKit 이 매번 활성 상태를 다시 계산해 summaryItem 의
