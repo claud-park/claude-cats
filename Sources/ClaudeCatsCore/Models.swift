@@ -31,14 +31,18 @@ public struct Session: Sendable, Equatable, Identifiable {
     public var cwd: String
     public var status: Status
     public var subagents: [Subagent]
+    /// transcript 의 `ai-title` 줄. 제목이 한 번도 안 붙은 세션은 nil.
+    public var title: String?
 
-    public init(id: String, pid: Int32, name: String, cwd: String, status: Status, subagents: [Subagent]) {
+    public init(id: String, pid: Int32, name: String, cwd: String, status: Status,
+                subagents: [Subagent], title: String? = nil) {
         self.id = id
         self.pid = pid
         self.name = name
         self.cwd = cwd
         self.status = status
         self.subagents = subagents
+        self.title = title
     }
 }
 

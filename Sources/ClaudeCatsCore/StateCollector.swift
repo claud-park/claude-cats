@@ -6,6 +6,11 @@ import os
 public final class StateCollector: @unchecked Sendable {
     public var subagentActiveWindow: TimeInterval = 15
     public var projectLookupRetry: TimeInterval = 60
+    /// transcript 를 다시 읽기까지의 최소 간격. mtime 이 바뀌어도 이 시간 전엔 안 읽는다.
+    public var titleRefreshInterval: TimeInterval = 10
+
+    /// transcript 는 수 MB 까지 자란다. 꼬리 256KB 만 본다.
+    static let titleTailBytes = 262_144
 
     private let fs: any FileSystem
     private let claudeDir: URL
@@ -14,9 +19,11 @@ public final class StateCollector: @unchecked Sendable {
     /// key: sessions/<pid>.json 경로. session 이 nil 이면 파싱 실패(비대화형/깨진 JSON)의 부정 캐시.
     private var sessionCache: [String: (modified: Date, session: Session?)] = [:]
     /// key: sessionId. url 이 nil 이면 실패 캐시(checkedAt + projectLookupRetry 후 재시도).
-    private var projectDirCache: [String: (url: URL?, checkedAt: Date)] = [:]
+    private var projectRootCache: [String: (url: URL?, checkedAt: Date)] = [:]
     /// key: meta.json 경로 → description
     private var metaCache: [String: String] = [:]
+    /// key: sessionId. title 이 nil 이면 "아직 제목이 안 붙은 세션".
+    private var titleCache: [String: (modified: Date, readAt: Date, title: String?)] = [:]
 
     public init(fileSystem: any FileSystem, claudeDir: URL) {
         self.fs = fileSystem
@@ -60,10 +67,13 @@ public final class StateCollector: @unchecked Sendable {
             seenIds.insert(session.id)
 
             session.subagents = session.status == .busy ? activeSubagents(for: session, now: now) : []
+            session.title = title(for: session, now: now)
             sessions.append(session)
         }
 
         sessionCache = sessionCache.filter { seenPaths.contains($0.key) }
+        titleCache = titleCache.filter { seenIds.contains($0.key) }
+        projectRootCache = projectRootCache.filter { seenIds.contains($0.key) }
         sessions.sort { ($0.name, $0.id) < ($1.name, $1.id) }
         return Snapshot(sessions: sessions, takenAt: now)
     }
@@ -100,32 +110,35 @@ public final class StateCollector: @unchecked Sendable {
         let description: String?
     }
 
-    private func projectDir(for session: Session, now: Date) -> URL? {
-        if let cached = projectDirCache[session.id] {
+    /// 세션이 사는 `projects/<encoded>` 디렉터리. transcript(`<id>.jsonl`) 나
+    /// 서브에이전트 디렉터리(`<id>/`) 중 하나만 있어도 그 디렉터리로 인정한다.
+    /// (서브에이전트를 한 번도 안 띄운 세션은 `<id>/` 가 없다.)
+    private func projectRoot(for session: Session, now: Date) -> URL? {
+        if let cached = projectRootCache[session.id] {
             if cached.url != nil { return cached.url }
             if now.timeIntervalSince(cached.checkedAt) < projectLookupRetry { return nil }
         }
         let projects = claudeDir.appendingPathComponent("projects")
-        let guess = projects
-            .appendingPathComponent(Self.encodeCwd(session.cwd))
-            .appendingPathComponent(session.id)
-        var found: URL? = (try? fs.stat(guess)) != nil ? guess : nil
+        let guess = projects.appendingPathComponent(Self.encodeCwd(session.cwd))
+        var found: URL? = holdsSession(guess, session.id) ? guess : nil
         if found == nil, let dirs = try? fs.list(projects) {
-            for dir in dirs {
-                let candidate = dir.appendingPathComponent(session.id)
-                if (try? fs.stat(candidate)) != nil {
-                    found = candidate
-                    break
-                }
+            for dir in dirs where holdsSession(dir, session.id) {
+                found = dir
+                break
             }
         }
-        projectDirCache[session.id] = (found, now)
+        projectRootCache[session.id] = (found, now)
         return found
     }
 
+    private func holdsSession(_ root: URL, _ id: String) -> Bool {
+        if (try? fs.stat(root.appendingPathComponent(id + ".jsonl"))) != nil { return true }
+        return (try? fs.stat(root.appendingPathComponent(id))) != nil
+    }
+
     private func activeSubagents(for session: Session, now: Date) -> [Subagent] {
-        guard let dir = projectDir(for: session, now: now) else { return [] }
-        let subDir = dir.appendingPathComponent("subagents")
+        guard let root = projectRoot(for: session, now: now) else { return [] }
+        let subDir = root.appendingPathComponent(session.id).appendingPathComponent("subagents")
         guard let files = try? fs.list(subDir) else { return [] }
 
         var result: [Subagent] = []
@@ -147,5 +160,46 @@ public final class StateCollector: @unchecked Sendable {
             result.append(Subagent(id: id, description: description, lastActivity: st.modified))
         }
         return result.sorted { $0.id < $1.id }
+    }
+
+    // MARK: - 세션 제목
+
+    private struct TitleLine: Decodable {
+        let aiTitle: String
+    }
+
+    /// 유휴 틱 비용은 세션당 transcript `stat` 1회다. 실제 읽기(`readTail`)는
+    /// mtime 이 바뀌었고 **동시에** 마지막 읽기로부터 titleRefreshInterval 이 지났을 때만.
+    private func title(for session: Session, now: Date) -> String? {
+        guard let root = projectRoot(for: session, now: now) else { return nil }
+        let transcript = root.appendingPathComponent(session.id + ".jsonl")
+        guard let st = try? fs.stat(transcript) else { return nil }
+
+        let cached = titleCache[session.id]
+        if let cached,
+           cached.modified == st.modified || now.timeIntervalSince(cached.readAt) < titleRefreshInterval {
+            return cached.title
+        }
+        guard let data = try? fs.readTail(transcript, maxBytes: Self.titleTailBytes) else {
+            log.warning("tail read failed: \(transcript.path, privacy: .public)")
+            return cached?.title
+        }
+        // 꼬리에 제목 줄이 없을 수 있다(긴 작업 중). 그럴 땐 이전 제목을 유지한다.
+        let title = Self.parseTitle(data) ?? cached?.title
+        titleCache[session.id] = (st.modified, now, title)
+        return title
+    }
+
+    /// 꼬리 바이트에서 마지막 `ai-title` 줄을 찾는다. 첫 조각은 잘렸을 수 있으므로 버린다.
+    static func parseTitle(_ data: Data) -> String? {
+        let text = String(decoding: data, as: UTF8.self)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > 1 else { return nil }
+        for line in lines.dropFirst().reversed() where line.contains("\"type\":\"ai-title\"") {
+            if let parsed = try? JSONDecoder().decode(TitleLine.self, from: Data(line.utf8)) {
+                return parsed.aiTitle
+            }
+        }
+        return nil
     }
 }

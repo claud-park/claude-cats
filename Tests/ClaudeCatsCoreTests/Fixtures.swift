@@ -22,6 +22,34 @@ enum Fixtures {
         "/home/.claude/projects/\(encodedCwd)/\(sessionId)/subagents"
     }
 
+    static func transcriptPath(encodedCwd: String, sessionId: String) -> String {
+        "/home/.claude/projects/\(encodedCwd)/\(sessionId).jsonl"
+    }
+
+    /// Claude Code 가 transcript 끝에 주기적으로 append 하는 제목 줄.
+    static func titleLine(_ title: String, sessionId: String = "sess") -> String {
+        """
+        {"type":"ai-title","aiTitle":"\(title)","sessionId":"\(sessionId)"}
+        """
+    }
+
+    static func promptLine(_ prompt: String, sessionId: String = "sess") -> String {
+        """
+        {"type":"last-prompt","lastPrompt":"\(prompt)",\
+        "leafUuid":"11111111-2222-3333-4444-555555555555","sessionId":"\(sessionId)"}
+        """
+    }
+
+    /// 일반 대화 줄. 제목 파싱이 무시해야 하는 잡음.
+    static func messageLine(_ text: String, sessionId: String = "sess") -> String {
+        """
+        {"parentUuid":null,"isSidechain":false,"type":"user",\
+        "message":{"role":"user","content":"\(text)"},\
+        "uuid":"66666666-7777-8888-9999-000000000000",\
+        "timestamp":"2026-09-07T00:00:00.000Z","sessionId":"\(sessionId)"}
+        """
+    }
+
     static func metaJSON(description: String) -> String {
         """
         {"agentType":"fork","isFork":true,"description":"\(description)",\
