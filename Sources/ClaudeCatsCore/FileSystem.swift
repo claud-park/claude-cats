@@ -1,9 +1,10 @@
 import Foundation
 
-// `stat` C 함수는 `RealFileSystem.stat(_:)` 메서드와 이름이 겹쳐 일반적인 방식으로는
-// 참조할 수 없다(타입 이니셜라이저 `stat.init()` 과도 모호해짐). 심볼을 직접 바인딩해 우회한다.
-@_silgen_name("stat")
-private func c_stat(_ path: UnsafePointer<Int8>, _ buf: UnsafeMutablePointer<Darwin.stat>) -> Int32
+/// 구조체 메서드 이름 `stat` 과의 충돌을 피하기 위한 파일 스코프 헬퍼.
+private func posixStat(_ path: String) -> Darwin.stat? {
+    var st = Darwin.stat()
+    return stat(path, &st) == 0 ? st : nil
+}
 
 public struct FileStat: Sendable, Equatable {
     public var modified: Date
@@ -37,8 +38,7 @@ public struct RealFileSystem: FileSystem {
     }
 
     public func stat(_ url: URL) throws -> FileStat {
-        var st = Darwin.stat()
-        guard url.path.withCString({ c_stat($0, &st) }) == 0 else {
+        guard let st = posixStat(url.path) else {
             throw CocoaError(.fileReadNoSuchFile)
         }
         let seconds = TimeInterval(st.st_mtimespec.tv_sec)
