@@ -108,4 +108,13 @@ import Foundation
         let b = layout([session("obsidian-71"), session("other")]).cats.first { $0.label == "obsidian-71" }!.paletteIndex
         #expect(a == b && (0..<8).contains(a))
     }
+
+    /// paletteSize 0 이면 `% 0` 이라 트랩한다. 0 은 1 로 보고 살아남아야 한다.
+    @Test func zeroPaletteSizeDoesNotTrap() {
+        var config = SceneConfig()
+        config.paletteSize = 0
+        let l = Scene.layout(Snapshot(sessions: [session("a")], takenAt: .now),
+                             screenSize: screen, animationsEnabled: false, config: config)
+        #expect(l.cats[0].paletteIndex == 0)
+    }
 }

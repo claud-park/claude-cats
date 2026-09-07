@@ -20,8 +20,9 @@ public final class StateCollector: @unchecked Sendable {
     private var sessionCache: [String: (modified: Date, session: Session?)] = [:]
     /// key: sessionId. url 이 nil 이면 실패 캐시(checkedAt + projectLookupRetry 후 재시도).
     private var projectRootCache: [String: (url: URL?, checkedAt: Date)] = [:]
-    /// key: meta.json 경로 → description
-    private var metaCache: [String: String] = [:]
+    /// key: meta.json 경로 → description. 이번 틱에 실행 중으로 판정된 서브에이전트의
+    /// meta 경로만 남긴다(`@testable` 로 테스트에서 직접 들여다본다).
+    private(set) var metaCache: [String: String] = [:]
     /// key: sessionId. title 이 nil 이면 "아직 제목이 안 붙은 세션".
     private var titleCache: [String: (modified: Date, readAt: Date, title: String?)] = [:]
 
@@ -39,6 +40,7 @@ public final class StateCollector: @unchecked Sendable {
         var sessions: [Session] = []
         var seenPaths = Set<String>()
         var seenIds = Set<String>()
+        var seenMetaPaths = Set<String>()
 
         for file in files where file.pathExtension == "json" {
             guard let st = try? fs.stat(file) else { continue }
@@ -66,7 +68,9 @@ public final class StateCollector: @unchecked Sendable {
             guard !seenIds.contains(session.id) else { continue }
             seenIds.insert(session.id)
 
-            session.subagents = session.status == .busy ? activeSubagents(for: session, now: now) : []
+            session.subagents = session.status == .busy
+                ? activeSubagents(for: session, now: now, seenMetaPaths: &seenMetaPaths)
+                : []
             session.title = title(for: session, now: now)
             sessions.append(session)
         }
@@ -74,6 +78,9 @@ public final class StateCollector: @unchecked Sendable {
         sessionCache = sessionCache.filter { seenPaths.contains($0.key) }
         titleCache = titleCache.filter { seenIds.contains($0.key) }
         projectRootCache = projectRootCache.filter { seenIds.contains($0.key) }
+        // 서브에이전트는 세션보다 훨씬 자주 생겼다 사라진다. 다른 캐시와 같은 규칙으로
+        // 이번 틱에 실행 중이던 것만 남기지 않으면 프로세스 수명 내내 단조 증가한다.
+        metaCache = metaCache.filter { seenMetaPaths.contains($0.key) }
         sessions.sort { ($0.name, $0.id) < ($1.name, $1.id) }
         return Snapshot(sessions: sessions, takenAt: now)
     }
@@ -136,7 +143,9 @@ public final class StateCollector: @unchecked Sendable {
         return (try? fs.stat(root.appendingPathComponent(id))) != nil
     }
 
-    private func activeSubagents(for session: Session, now: Date) -> [Subagent] {
+    private func activeSubagents(
+        for session: Session, now: Date, seenMetaPaths: inout Set<String>
+    ) -> [Subagent] {
         guard let root = projectRoot(for: session, now: now) else { return [] }
         let subDir = root.appendingPathComponent(session.id).appendingPathComponent("subagents")
         guard let files = try? fs.list(subDir) else { return [] }
@@ -148,6 +157,7 @@ public final class StateCollector: @unchecked Sendable {
             let base = file.deletingPathExtension().lastPathComponent
             let id = base.hasPrefix("agent-") ? String(base.dropFirst("agent-".count)) : base
             let metaURL = file.deletingPathExtension().appendingPathExtension("meta.json")
+            seenMetaPaths.insert(metaURL.path)
             let description: String
             if let cached = metaCache[metaURL.path] {
                 description = cached
@@ -165,6 +175,7 @@ public final class StateCollector: @unchecked Sendable {
     // MARK: - 세션 제목
 
     private struct TitleLine: Decodable {
+        let type: String
         let aiTitle: String
     }
 
@@ -187,18 +198,24 @@ public final class StateCollector: @unchecked Sendable {
             return cached?.title
         }
         // 꼬리에 제목 줄이 없을 수 있다(긴 작업 중). 그럴 땐 이전 제목을 유지한다.
-        let title = Self.parseTitle(data) ?? cached?.title
+        // 파일이 꼬리보다 짧으면 잘린 게 아니므로 첫 줄도 온전한 줄이다.
+        let title = Self.parseTitle(data, truncated: data.count >= Self.titleTailBytes) ?? cached?.title
         titleCache[session.id] = (st.modified, now, title)
         return title
     }
 
-    /// 꼬리 바이트에서 마지막 `ai-title` 줄을 찾는다. 첫 조각은 잘렸을 수 있으므로 버린다.
-    static func parseTitle(_ data: Data) -> String? {
+    /// 꼬리 바이트에서 마지막 `ai-title` 줄을 찾는다.
+    /// `truncated` 면 첫 조각이 줄 한가운데서 시작하므로 버린다.
+    /// 판정은 부분 문자열이 아니라 디코딩한 `type` 필드로 한다 — 프롬프트 본문에
+    /// `ai-title` 이라는 글자가 들어간 줄을 제목으로 오인하지 않게.
+    static func parseTitle(_ data: Data, truncated: Bool) -> String? {
         let text = String(decoding: data, as: UTF8.self)
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.count > 1 else { return nil }
-        for line in lines.dropFirst().reversed() where line.contains("\"type\":\"ai-title\"") {
-            if let parsed = try? JSONDecoder().decode(TitleLine.self, from: Data(line.utf8)) {
+        let all = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = truncated ? Array(all.dropFirst()) : Array(all)
+        // 줄마다 JSON 을 디코딩하면 비싸다. 후보만 싸게 거른 뒤 디코딩한다.
+        for line in lines.reversed() where line.contains("ai-title") {
+            if let parsed = try? JSONDecoder().decode(TitleLine.self, from: Data(line.utf8)),
+               parsed.type == "ai-title" {
                 return parsed.aiTitle
             }
         }

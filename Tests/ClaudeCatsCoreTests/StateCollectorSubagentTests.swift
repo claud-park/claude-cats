@@ -75,6 +75,40 @@ import Foundation
         #expect(subs.first { $0.id == "nometa" }?.description == "")
     }
 
+    /// 서브에이전트는 계속 생겼다 사라진다. 비활성이 되면 meta 캐시에서도 빠져야
+    /// 프로세스 수명 내내 단조 증가하지 않는다.
+    @Test func metaCachePrunedWhenSubagentGoesInactive() {
+        let fs = makeFS()
+        let dir = Fixtures.subagentDir(encodedCwd: encoded, sessionId: "sess")
+        addAgent(fs, dir: dir, id: "a", ago: 1)
+        let metaPath = "\(dir)/agent-a.meta.json"
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].subagents.map(\.id) == ["a"])
+        #expect(c.metaCache[metaPath] == "work")
+
+        // mtime 은 그대로인 채 20초 경과 → 15초 창 밖이라 비활성.
+        let later = now.addingTimeInterval(20)
+        #expect(c.collect(now: later).sessions[0].subagents.isEmpty)
+        #expect(c.metaCache[metaPath] == nil)
+        #expect(c.metaCache.isEmpty)
+    }
+
+    /// 파일 자체가 사라진 경우에도 마찬가지.
+    @Test func metaCachePrunedWhenSubagentFileRemoved() {
+        let fs = makeFS()
+        let dir = Fixtures.subagentDir(encodedCwd: encoded, sessionId: "sess")
+        addAgent(fs, dir: dir, id: "a", ago: 1)
+        addAgent(fs, dir: dir, id: "b", ago: 1)
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        _ = c.collect(now: now)
+        #expect(c.metaCache.count == 2)
+
+        fs.remove("\(dir)/agent-b.jsonl")
+        fs.remove("\(dir)/agent-b.meta.json")
+        #expect(c.collect(now: now.addingTimeInterval(1)).sessions[0].subagents.map(\.id) == ["a"])
+        #expect(Array(c.metaCache.keys) == ["\(dir)/agent-a.meta.json"])
+    }
+
     @Test func jsonlContentIsNeverRead() {
         let fs = makeFS()
         let dir = Fixtures.subagentDir(encodedCwd: encoded, sessionId: "sess")

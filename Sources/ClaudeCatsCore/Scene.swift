@@ -73,7 +73,8 @@ public enum Scene {
                 x: CGFloat(col) * config.slotWidth + config.slotPadding,
                 y: config.bottomInset + CGFloat(row) * config.rowHeight
             )
-            let paletteIndex = Int(hash % UInt64(config.paletteSize))
+            // paletteSize 0 이면 % 가 트랩한다. 설정 실수로 앱이 죽지는 않게 한다.
+            let paletteIndex = Int(hash % UInt64(max(1, config.paletteSize)))
             let pose: Pose = session.status == .busy ? .sitting : .sleeping
 
             let title = session.title.flatMap { $0.isEmpty ? nil : $0 }

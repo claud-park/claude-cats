@@ -54,12 +54,16 @@ public struct RealFileSystem: FileSystem {
     }
 
     public func readTail(_ url: URL, maxBytes: Int) throws -> Data {
+        guard maxBytes > 0 else { return Data() }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let size = try handle.seekToEnd()
         let offset = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
         try handle.seek(toOffset: offset)
-        return try handle.readToEnd() ?? Data()
+        // transcript 는 계속 append 된다. seek 와 read 사이에 파일이 자라면
+        // readToEnd() 는 maxBytes 를 넘겨 읽는다 — 그래서 길이를 명시한다.
+        let wanted = min(maxBytes, Int(size - offset))
+        return try handle.read(upToCount: wanted) ?? Data()
     }
 
     public func processAlive(_ pid: Int32) -> Bool {

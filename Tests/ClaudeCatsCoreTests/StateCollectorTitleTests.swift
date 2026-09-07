@@ -128,6 +128,40 @@ import Foundation
         #expect(collector(fs).collect(now: now).sessions[0].title == nil)
     }
 
+    /// 꼬리가 파일 전체면 첫 줄도 온전하다 — 제목이 1번째 줄이어도 찾아야 한다.
+    @Test func titleOnFirstLineOfShortTranscriptIsFound() {
+        let fs = makeFS()
+        fs.add(transcript, Fixtures.titleLine("first") + "\n", modified: now)
+        #expect(collector(fs).collect(now: now).sessions[0].title == "first")
+    }
+
+    /// Claude Code 가 공백을 넣어 쓰더라도 찾아야 한다(부분 문자열 매칭이면 놓친다).
+    @Test func titleWithSpacesInJSONIsFound() {
+        let fs = makeFS()
+        fs.add(transcript,
+               Fixtures.messageLine("x") + "\n" + #"{ "type": "ai-title", "aiTitle": "X" }"# + "\n",
+               modified: now)
+        #expect(collector(fs).collect(now: now).sessions[0].title == "X")
+    }
+
+    /// 프롬프트 본문에 `ai-title` 이라는 글자가 들어 있어도 type 이 다르면 제목이 아니다.
+    @Test func aiTitleInsideUserLineIsIgnored() {
+        let fs = makeFS()
+        let decoy = #"{"type":"user","aiTitle":"NOT A TITLE","message":"add an ai-title field"}"#
+        fs.add(transcript,
+               Fixtures.messageLine("x") + "\n" + Fixtures.titleLine("real") + "\n" + decoy + "\n",
+               modified: now)
+        #expect(collector(fs).collect(now: now).sessions[0].title == "real")
+    }
+
+    /// 미끼만 있으면 제목은 없다.
+    @Test func onlyDecoyGivesNoTitle() {
+        let fs = makeFS()
+        let decoy = #"{"type":"user","aiTitle":"NOT A TITLE","message":"add an ai-title field"}"#
+        fs.add(transcript, Fixtures.messageLine("x") + "\n" + decoy + "\n", modified: now)
+        #expect(collector(fs).collect(now: now).sessions[0].title == nil)
+    }
+
     @Test func titleChangeChangesSnapshotEquality() {
         func snap(_ title: String?) -> Snapshot {
             Snapshot(sessions: [Session(id: "s", pid: 1, name: "n", cwd: "/", status: .idle,
