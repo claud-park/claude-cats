@@ -56,6 +56,33 @@ class TransformTests(unittest.TestCase):
         self.assertAlmostEqual(layers[0].line_width, 3.0, places=6)
 
 
+class UnitTests(unittest.TestCase):
+    def test_percentage_fill_opacity(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#123456" fill-opacity="50%"/>')
+        layer = S.parse_svg(svg)["body"][0]
+        self.assertAlmostEqual(layer.fill[4], 0.5, places=6)
+
+    def test_px_stroke_width(self):
+        svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-width="2px"/>')
+        self.assertAlmostEqual(S.parse_svg(svg)["body"][0].line_width, 2.0, places=6)
+
+    def test_percentage_opacity(self):
+        svg = wrap('<g opacity="40%"><path d="M0 0 L1 1" fill="#FUR"/></g>')
+        self.assertAlmostEqual(S.parse_svg(svg)["body"][0].opacity, 0.4, places=6)
+
+    def test_unknown_unit_fails_with_attribute_name(self):
+        svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-width="2em"/>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("stroke-width", str(ctx.exception))
+
+    def test_percentage_length_fails(self):
+        svg = wrap('<rect x="0" y="0" width="50%" height="4" fill="#FUR"/>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("width", str(ctx.exception))
+
+
 class PathCommandTests(unittest.TestCase):
     def test_relative_h_v_q(self):
         svg = wrap('<path d="M10 10 h5 v5 q5 0 5 -5" fill="none" stroke="#FUR"/>')
@@ -120,6 +147,23 @@ class FailureTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             S.parse_svg(svg)
         self.assertIn("linearGradient", str(ctx.exception))
+
+    def test_clip_path_attribute_aborts(self):
+        svg = wrap('<g clip-path="url(#c)"><path d="M0 0 L1 1" fill="#FUR"/></g>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("clip-path", str(ctx.exception))
+        self.assertIn("g", str(ctx.exception))
+
+    def test_mask_in_inline_style_aborts(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR" style="mask:url(#m)"/>')
+        with self.assertRaises(SystemExit) as ctx:
+            S.parse_svg(svg)
+        self.assertIn("mask", str(ctx.exception))
+
+    def test_clip_path_none_is_fine(self):
+        svg = wrap('<path d="M0 0 L1 1" fill="#FUR" clip-path="none"/>')
+        self.assertEqual(len(S.parse_svg(svg)["body"]), 1)
 
     def test_gradient_inside_defs_aborts(self):
         svg = wrap('<defs><linearGradient id="g"/></defs>')

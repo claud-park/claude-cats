@@ -4,3 +4,5 @@
 .swiftpm/
 .superpowers/
 dist/
+__pycache__/
+*.pyc

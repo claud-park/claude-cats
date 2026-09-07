@@ -87,7 +87,7 @@ enum CatArt {
                 p.addLine(to: CGPoint(x: 42.5, y: 2.2))
                 return p
             }(),
-            fill: .fixed(r: 0, g: 0, b: 0, a: 1),
+            fill: nil,
             stroke: .fixed(r: 0.1333, g: 0.1216, b: 0.1333, a: 1),
             lineWidth: 0.8,
             lineCap: .round,
@@ -280,7 +280,7 @@ enum CatArt {
                 p.addLine(to: CGPoint(x: 47, y: 31))
                 return p
             }(),
-            fill: .fixed(r: 0, g: 0, b: 0, a: 1),
+            fill: nil,
             stroke: .fixed(r: 0.9098, g: 0.8941, b: 0.8627, a: 1),
             lineWidth: 0.7,
             lineCap: .round,
@@ -436,7 +436,7 @@ enum CatArt {
                 p.addLine(to: CGPoint(x: 30.5, y: 5.3))
                 return p
             }(),
-            fill: .fixed(r: 0, g: 0, b: 0, a: 1),
+            fill: nil,
             stroke: .fixed(r: 0.1333, g: 0.1216, b: 0.1333, a: 1),
             lineWidth: 0.7,
             lineCap: .round,
@@ -565,7 +565,7 @@ enum CatArt {
                 p.addLine(to: CGPoint(x: 4, y: 15))
                 return p
             }(),
-            fill: .fixed(r: 0, g: 0, b: 0, a: 1),
+            fill: nil,
             stroke: .fixed(r: 0.9098, g: 0.8941, b: 0.8627, a: 1),
             lineWidth: 0.7,
             lineCap: .round,

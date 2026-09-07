@@ -16,7 +16,7 @@
       <!-- 앞발 -->
       <path d="M17 58 C17 55 22 54 25 55 C28 54 31 56 30 59 C30 62 18 62 17 58 Z" fill="#f3efe8"/>
       <path d="M34 59 C33 56 36 54 39 55 C42 54 47 55 47 58 C46 62 34 62 34 59 Z" fill="#f3efe8"/>
-      <path d="M21.5 60.5 v1.3 M24.5 61 v1.3 M27.5 60.5 v1.3 M36.5 60.5 v1.3 M39.5 61 v1.3 M42.5 60.5 v1.3" stroke="#221f22" stroke-width="0.8" stroke-linecap="round" opacity="0.45"/>
+      <path d="M21.5 60.5 v1.3 M24.5 61 v1.3 M27.5 60.5 v1.3 M36.5 60.5 v1.3 M39.5 61 v1.3 M42.5 60.5 v1.3" fill="none" stroke="#221f22" stroke-width="0.8" stroke-linecap="round" opacity="0.45"/>
       <!-- 귀 -->
       <path d="M18 19 L19 3 L30 12 Z" fill="#FUR"/>
       <path d="M46 19 L45 3 L34 12 Z" fill="#FUR"/>
@@ -37,6 +37,6 @@
       <path d="M30.5 29.5 L33.5 29.5 L32 31.5 Z" fill="#d68f8f"/>
       <path d="M32 31.5 v1.5 M32 33 q-2 2 -3.5 0.5 M32 33 q2 2 3.5 0.5" fill="none" stroke="#221f22" stroke-width="0.8" stroke-linecap="round" opacity="0.7"/>
       <!-- 수염 -->
-      <path d="M28 31 L18 29 M28 32.5 L17 33 M36 31 L46 29 M36 32.5 L47 33" stroke="#e8e4dc" stroke-width="0.7" stroke-linecap="round" opacity="0.85"/>
+      <path d="M28 31 L18 29 M28 32.5 L17 33 M36 31 L46 29 M36 32.5 L47 33" fill="none" stroke="#e8e4dc" stroke-width="0.7" stroke-linecap="round" opacity="0.85"/>
   </g>
 </svg>

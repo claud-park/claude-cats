@@ -44,10 +44,30 @@ NAMED_COLORS = {
 }
 
 NUMBER_RE = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
+SCALAR_RE = re.compile(r"\s*([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)\s*(%|[a-zA-Z]*)\s*\Z")
+
+# 변환할 수 없는데 조용히 무시하면 그림이 달라지는 속성들.
+UNSUPPORTED_ATTRS = ("clip-path", "mask", "filter")
 
 
 def fail(message):
     raise SystemExit("svg2swift: " + message)
+
+
+def parse_scalar(text, attribute, allow_percent=False):
+    """'2', '2px', '50%' → 숫자. 퍼센트는 1/100 로 읽고, 그 밖의 단위는 에러."""
+    match = SCALAR_RE.match(text or "")
+    if not match:
+        fail("%s 값을 읽을 수 없다: %r" % (attribute, text))
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    if unit == "%":
+        if not allow_percent:
+            fail("%s 에는 퍼센트를 쓸 수 없다: %r" % (attribute, text))
+        return value / 100.0
+    if unit not in ("", "px"):
+        fail("%s 의 단위 %r 는 지원하지 않는다 (사용자 단위나 px 만 쓴다): %r" % (attribute, unit, text))
+    return value
 
 
 # ---------------------------------------------------------------- 색
@@ -487,10 +507,7 @@ def number_attr(element, name, default=None):
     text = element.get(name)
     if text is None or text.strip() == "":
         return default
-    match = NUMBER_RE.match(text.strip())
-    if not match:
-        fail("<%s> 의 %s 값을 읽을 수 없다: %r" % (local_name(element.tag), name, text))
-    return float(match.group(0))
+    return parse_scalar(text, "<%s> 의 %s" % (local_name(element.tag), name))
 
 
 def local_name(tag):
@@ -517,7 +534,8 @@ def element_style(element, inherited):
     # opacity 는 상속이 아니라 그룹 합성이지만, 여기서는 곱으로 접는다.
     group_opacity = style.pop("opacity", None)
     if group_opacity is not None:
-        style["_opacity"] = float(inherited.get("_opacity", 1.0)) * float(group_opacity)
+        alpha = parse_scalar(group_opacity, "opacity", allow_percent=True)
+        style["_opacity"] = float(inherited.get("_opacity", 1.0)) * max(0.0, min(1.0, alpha))
     return style
 
 
@@ -525,7 +543,7 @@ def paint_alpha(style, key):
     value = style.get(key)
     if value is None:
         return 1.0
-    return max(0.0, min(1.0, float(value)))
+    return max(0.0, min(1.0, parse_scalar(value, key, allow_percent=True)))
 
 
 def make_layers(cmds, style, matrix):
@@ -538,7 +556,11 @@ def make_layers(cmds, style, matrix):
         return []
 
     base_opacity = float(style.get("_opacity", 1.0))
-    line_width = float(style.get("stroke-width", 1.0)) * mat_scale_factor(matrix) if stroke else 0.0
+    line_width = 0.0
+    if stroke is not None:
+        width = style.get("stroke-width")
+        width = 1.0 if width is None else parse_scalar(width, "stroke-width")
+        line_width = width * mat_scale_factor(matrix)
     line_cap = (style.get("stroke-linecap") or "butt").lower()
     if line_cap not in ("butt", "round", "square"):
         fail("지원하지 않는 stroke-linecap: %s" % line_cap)
@@ -574,6 +596,16 @@ def check_only_ignorable(element):
             continue
         if name not in IGNORED_TAGS:
             fail("지원하지 않는 SVG 요소: <%s> (그라디언트·필터·텍스트·이미지 등은 변환할 수 없다)" % name)
+
+
+def check_unsupported_attrs(element, name):
+    """조용히 무시하면 그림이 달라지는 속성은 이름을 찍고 중단한다."""
+    declarations = parse_style(element.get("style"))
+    for attribute in UNSUPPORTED_ATTRS:
+        value = element.get(attribute) or declarations.get(attribute)
+        if value and value.strip().lower() != "none":
+            fail("<%s> 의 %s 는 변환할 수 없다 (%s=%r). 내보내기 전에 flatten 해야 한다."
+                 % (name, attribute, attribute, value))
 
 
 def shape_commands(element):
@@ -630,6 +662,7 @@ def walk(element, style, matrix, buckets, bucket):
         if name == "defs":
             check_only_ignorable(child)
             continue
+        check_unsupported_attrs(child, name)
         child_matrix = mat_mul(matrix, parse_transform(child.get("transform")))
         child_style = element_style(child, style)
         if name in ("g", "svg", "a"):

@@ -35,6 +35,8 @@ python3 -m unittest scripts/test_svg2swift.py   # 변환기 회귀 테스트
   균일 비율로 맞춰 가운데 정렬한다(선 두께도 같이 스케일된다).
 - 좌표계는 변환기가 AppKit 방향(y 위로)으로 뒤집어 준다. SVG 는 평소대로 y 아래로 그린다.
 - 문서 순서가 그대로 그리는 순서다(뒤에 오는 것이 위에 덮인다).
+- 단, 꼬리(`tail-a` / `tail-b`)는 문서 순서와 상관없이 **항상 몸통 뒤에** 깔린다.
+  런타임이 꼬리 그릇 레이어를 몸통 아래에 넣기 때문이다.
 
 ### 색
 
@@ -56,8 +58,12 @@ python3 -m unittest scripts/test_svg2swift.py   # 변환기 회귀 테스트
   그룹에서 상속·합성), 인라인 `style="fill:...;stroke:..."`
 - `path` 의 `d`: `M/m L/l H/h V/v C/c S/s Q/q T/t A/a Z/z` 전부. 호(`A`)는 90° 이하 조각의
   3차 베지어로 근사한다.
-- 그라디언트·필터·텍스트·이미지·`use` 등은 변환할 수 없다. 만나면 요소 이름을 찍고 중단하니
-  Figma·Illustrator 에서 내보낼 때 "윤곽선으로 만들기 / flatten" 을 먼저 하면 된다.
+- 숫자 값은 사용자 단위와 `px` 만 받는다(`em`·`pt` 등은 에러). `opacity`·`fill-opacity`·
+  `stroke-opacity` 는 `0.5` 와 `50%` 둘 다 된다.
+- 그라디언트·필터·텍스트·이미지·`use` 등은 변환할 수 없다. `clip-path` / `mask` / `filter`
+  **속성**(인라인 `style` 포함)도 마찬가지다 — 조용히 무시하면 그림이 달라지므로 요소 이름과
+  속성 이름을 찍고 중단한다. Figma·Illustrator 에서 내보낼 때 "윤곽선으로 만들기 / flatten"
+  을 먼저 하면 된다.
 
 인접한 도형이 같은 스타일(fill·stroke·선 두께·캡·불투명도)이면 한 레이어로 합쳐 레이어 수를 줄인다.
 
