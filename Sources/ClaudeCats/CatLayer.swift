@@ -1,7 +1,8 @@
 import AppKit
 import ClaudeCatsCore
 
-/// 고양이 한 마리. 서브레이어: 꼬리 2프레임(몸 뒤) → 몸 → 라벨 → 배지 → 말풍선.
+/// 고양이 한 마리. 서브레이어: 몸·꼬리 2프레임(z 순서는 원본 SVG 문서 순서를 따른다)
+/// → 라벨 → 배지 → 말풍선.
 /// 몸·꼬리는 `CatArt`(Design/cats/*.svg 에서 생성) 의 도형 목록을 CAShapeLayer 로 펼친 것이다.
 /// 모든 프로퍼티 변경은 호출자가 CATransaction 액션을 끈 상태에서 한다.
 /// 메인 스레드에서만 사용한다 (DesktopWindow 가 유일한 호출자)
@@ -22,6 +23,7 @@ final class CatLayer: CALayer {
     /// 팔레트가 바뀌면 색만 갈아끼울 자리들(경로는 그대로 둔다).
     private var furSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
     private var furDarkSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
+    private var furLightSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
     private var tailToggle = false
     /// 최초 apply 는 모든 서브레이어를 채워야 한다. 이후로는 바뀐 것만 건드린다.
     private var hasApplied = false
@@ -48,7 +50,8 @@ final class CatLayer: CALayer {
         // 말풍선은 고양이 상자 밖(위·좌우)으로 나가므로 자기 bounds 를 따로 갖는다.
         // anchorPoint 0 에서 `position == bounds.origin` 이면 경로 좌표 = 고양이 좌표가 된다.
         // bounds 는 말풍선이 실제로 차지할 수 있는 최대 범위를 덮는다
-        // (x: 꼭지 중앙 32 기준 ±65 에 왼쪽 클램프 여유, y: 자는 자세 꼭지 46 ~ 앉은 자세 상단 89).
+        // (x: 꼭지 중앙 32 기준 ±65 에 왼쪽 클램프 여유, y: 0 ~ 100 — 앉은 자세 상단이
+        // 아트 꼭대기(64 이하) + 꼭지 2 + 꼭지 높이 5 + 말풍선 18 이라 100 이면 넉넉하다).
         bubbleLayer.anchorPoint = .zero
         bubbleLayer.bounds = CGRect(x: -70, y: 0, width: 204, height: 100)
         bubbleLayer.position = CGPoint(x: -70, y: 0)
@@ -61,7 +64,11 @@ final class CatLayer: CALayer {
         bubbleTextLayer.truncationMode = .end
         bubbleTextLayer.contentsScale = contentsScale
 
-        [tailA, tailB, bodyLayer, labelLayer, badgeLayer, bubbleLayer, bubbleTextLayer].forEach(addSublayer)
+        // 꼬리를 몸 위에 얹을지 뒤에 깔지는 원본 SVG 의 문서 순서가 정한다.
+        let art: [CALayer] = CatArt.sittingTailAboveBody
+            ? [bodyLayer, tailA, tailB]
+            : [tailA, tailB, bodyLayer]
+        (art + [labelLayer, badgeLayer, bubbleLayer, bubbleTextLayer]).forEach(addSublayer)
         apply(placement)
     }
 
@@ -101,6 +108,7 @@ final class CatLayer: CALayer {
             let colors = CatShapes.palette[p.paletteIndex % CatShapes.palette.count]
             paint(furSlots, with: colors.fur.cgColor)
             paint(furDarkSlots, with: colors.furDark.cgColor)
+            paint(furLightSlots, with: colors.furLight.cgColor)
         }
 
         if first || p.label != previous.label {
@@ -151,6 +159,7 @@ final class CatLayer: CALayer {
         }
         furSlots.removeAll()
         furDarkSlots.removeAll()
+        furLightSlots.removeAll()
 
         switch pose {
         case .sitting:
@@ -174,7 +183,8 @@ final class CatLayer: CALayer {
             shape.path = piece.path
             shape.lineWidth = piece.lineWidth
             shape.lineCap = piece.lineCap
-            shape.lineJoin = .round
+            shape.lineJoin = piece.lineJoin
+            shape.fillRule = piece.fillRule
             shape.opacity = piece.opacity
             shape.contentsScale = contentsScale
             shape.fillColor = resolve(piece.fill, on: shape, isStroke: false)
@@ -195,6 +205,9 @@ final class CatLayer: CALayer {
             return nil
         case .furDark:
             furDarkSlots.append((shape, isStroke))
+            return nil
+        case .furLight:
+            furLightSlots.append((shape, isStroke))
             return nil
         }
     }
@@ -223,9 +236,10 @@ final class CatLayer: CALayer {
         static let fontSize: CGFloat = 10
         static let screenMargin: CGFloat = 4   // 화면 왼쪽 끝에서 띄울 여백
 
-        /// 꼭지 끝 y. 자는 자세는 웅크려서 머리(귀 끝 y ≈ 43)가 훨씬 낮다.
+        /// 꼭지 끝 y. 그림 꼭대기 바로 위에 둔다 — 자는 자세는 웅크려서 훨씬 낮다.
+        /// 높이는 생성기가 아트에서 재 준다(`CatArt.*Top`).
         static func tipY(for pose: Pose) -> CGFloat {
-            pose == .sitting ? 66 : 46
+            (pose == .sitting ? CatArt.sittingTop : CatArt.sleepingTop) + 2
         }
     }
 
