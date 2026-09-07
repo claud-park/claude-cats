@@ -22,6 +22,9 @@ public protocol FileSystem: Sendable {
     /// 파일·디렉터리 모두. 없으면 throw.
     func stat(_ url: URL) throws -> FileStat
     func read(_ url: URL) throws -> Data
+    /// 파일 끝에서 최대 maxBytes 만. transcript 는 수 MB 라 통째로 읽지 않는다.
+    /// 앞쪽이 UTF-8 문자 중간에서 잘릴 수 있으니 호출자가 첫 줄을 버려야 한다.
+    func readTail(_ url: URL, maxBytes: Int) throws -> Data
     /// kill(pid, 0) 기준. EPERM 은 살아있는 것으로 본다.
     func processAlive(_ pid: Int32) -> Bool
 }
@@ -48,6 +51,15 @@ public struct RealFileSystem: FileSystem {
 
     public func read(_ url: URL) throws -> Data {
         try Data(contentsOf: url)
+    }
+
+    public func readTail(_ url: URL, maxBytes: Int) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let size = try handle.seekToEnd()
+        let offset = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        try handle.seek(toOffset: offset)
+        return try handle.readToEnd() ?? Data()
     }
 
     public func processAlive(_ pid: Int32) -> Bool {

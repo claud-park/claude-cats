@@ -50,6 +50,12 @@ final class FakeFileSystem: FileSystem, @unchecked Sendable {
         return f.data
     }
 
+    func readTail(_ url: URL, maxBytes: Int) throws -> Data {
+        readCount[url.path, default: 0] += 1
+        guard let f = files[url.path] else { throw CocoaError(.fileReadNoSuchFile) }
+        return f.data.count > maxBytes ? f.data.suffix(maxBytes) : f.data
+    }
+
     func processAlive(_ pid: Int32) -> Bool {
         alivePids.contains(pid)
     }

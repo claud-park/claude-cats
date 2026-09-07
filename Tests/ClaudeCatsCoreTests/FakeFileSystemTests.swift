@@ -32,4 +32,20 @@ import Foundation
         _ = try fs.read(URL(fileURLWithPath: "/f"))
         #expect(fs.readCount["/f"] == 2)
     }
+
+    @Test func readTailReturnsSuffixAndCountsReads() throws {
+        let fs = FakeFileSystem()
+        fs.add("/f", "0123456789", modified: .now)
+        let tail = try fs.readTail(URL(fileURLWithPath: "/f"), maxBytes: 4)
+        #expect(String(decoding: tail, as: UTF8.self) == "6789")
+        // maxBytes 가 파일보다 크면 전체
+        let all = try fs.readTail(URL(fileURLWithPath: "/f"), maxBytes: 100)
+        #expect(String(decoding: all, as: UTF8.self) == "0123456789")
+        #expect(fs.readCount["/f"] == 2)
+    }
+
+    @Test func readTailMissingFileThrows() {
+        let fs = FakeFileSystem()
+        #expect(throws: (any Error).self) { try fs.readTail(URL(fileURLWithPath: "/nope"), maxBytes: 10) }
+    }
 }
