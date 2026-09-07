@@ -12,7 +12,7 @@ FUR="#7D6C62"
 FUR_DARK="#66584F"
 FUR_LIGHT="#A09084"
 
-for POSE in sitting sleeping; do
+for POSE in sitting sleeping alert; do
   SRC="Design/cats/source/$POSE-figma.svg"
   if [ -f "$SRC" ]; then
     python3 scripts/import-cat-svg.py "$SRC" \
@@ -26,7 +26,12 @@ OUT="Sources/ClaudeCats/CatArt.generated.swift"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-python3 scripts/svg2swift.py Design/cats/sitting.svg Design/cats/sleeping.svg > "$TMP"
+INPUTS="Design/cats/sitting.svg Design/cats/sleeping.svg"
+# alert.svg 는 아직 없을 수 있다. 없으면 생성기가 앉은 자세를 alert* 로 별칭 삼는다.
+[ -f Design/cats/alert.svg ] && INPUTS="$INPUTS Design/cats/alert.svg"
+
+# shellcheck disable=SC2086
+python3 scripts/svg2swift.py $INPUTS > "$TMP"
 mv "$TMP" "$OUT"
 echo "생성: $OUT ($(wc -l < "$OUT" | tr -d ' ') 줄)"
 

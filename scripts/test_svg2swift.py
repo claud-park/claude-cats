@@ -307,6 +307,8 @@ class RealArtTests(unittest.TestCase):
     def setUp(self):
         self.sitting = os.path.join(REPO, "Design", "cats", "sitting.svg")
         self.sleeping = os.path.join(REPO, "Design", "cats", "sleeping.svg")
+        self.alert = os.path.join(REPO, "Design", "cats", "alert.svg")
+        self.all_poses = (self.sitting, self.sleeping, self.alert)
 
     def test_groups_split(self):
         with open(self.sitting, encoding="utf-8") as f:
@@ -317,21 +319,43 @@ class RealArtTests(unittest.TestCase):
         self.assertTrue(all(groups[k] for k in ("body", "tailA", "tailB")))
 
     def test_generated_swift_has_all_constants(self):
-        swift = S.convert_files([self.sitting, self.sleeping])
-        for name in ("sittingBody", "sittingTailA", "sittingTailB", "sleepingBody"):
+        swift = S.convert_files(list(self.all_poses))
+        for name in ("sittingBody", "sittingTailA", "sittingTailB", "sleepingBody",
+                     "alertBody", "alertTailA", "alertTailB"):
             self.assertIn("static let %s: [CatArtLayer]" % name, swift)
         self.assertIn("GENERATED", swift)
 
     def test_generated_swift_has_scalars(self):
-        swift = S.convert_files([self.sitting, self.sleeping])
+        swift = S.convert_files(list(self.all_poses))
         self.assertIn("static let sittingTailAboveBody: Bool", swift)
         self.assertIn("static let sittingTop: CGFloat", swift)
         self.assertIn("static let sleepingTop: CGFloat", swift)
+        self.assertIn("static let alertTop: CGFloat", swift)
+        self.assertIn("static let alertTailAboveBody: Bool", swift)
         # 자는 자세는 꼬리 프레임이 없으므로 z 순서 상수도 나오지 않는다.
         self.assertNotIn("sleepingTailAboveBody", swift)
 
+    def test_alert_groups_split_like_sitting(self):
+        with open(self.alert, encoding="utf-8") as f:
+            groups = S.parse_svg(f.read())
+        self.assertTrue(all(groups[k] for k in ("body", "tailA", "tailB")))
+
+    def test_missing_alert_svg_falls_back_to_sitting(self):
+        """alert.svg 를 아직 안 그렸어도 런타임이 참조하는 alert* 상수는 나와야 한다."""
+        swift = S.convert_files([self.sitting, self.sleeping])
+        self.assertIn("static let alertBody: [CatArtLayer] = sittingBody", swift)
+        self.assertIn("static let alertTailA: [CatArtLayer] = sittingTailA", swift)
+        self.assertIn("static let alertTailB: [CatArtLayer] = sittingTailB", swift)
+        self.assertIn("static let alertTop: CGFloat = sittingTop", swift)
+        self.assertIn("static let alertTailAboveBody: Bool = sittingTailAboveBody", swift)
+
+    def test_real_alert_svg_beats_the_fallback(self):
+        swift = S.convert_files(list(self.all_poses))
+        self.assertNotIn("= sittingBody", swift)
+        self.assertNotIn("= sittingTop", swift)
+
     def test_top_is_inside_the_box_and_above_the_middle(self):
-        for path in (self.sitting, self.sleeping):
+        for path in self.all_poses:
             with open(path, encoding="utf-8") as f:
                 groups = S.parse_svg(f.read())
             box = S.layers_bounds([l for layers in groups.values() for l in layers])
@@ -339,7 +363,7 @@ class RealArtTests(unittest.TestCase):
             self.assertLessEqual(box[3], 64)
 
     def test_all_coordinates_in_range(self):
-        for path in (self.sitting, self.sleeping):
+        for path in self.all_poses:
             with open(path, encoding="utf-8") as f:
                 groups = S.parse_svg(f.read())
             for name, layers in groups.items():
