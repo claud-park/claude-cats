@@ -1,7 +1,7 @@
 import AppKit
 import ClaudeCatsCore
 
-/// 고양이 한 마리. 서브레이어: 꼬리 2프레임(몸 뒤) → 몸 → 라벨 → 배지.
+/// 고양이 한 마리. 서브레이어: 꼬리 2프레임(몸 뒤) → 몸 → 라벨 → 배지 → 말풍선.
 /// 몸·꼬리는 `CatArt`(Design/cats/*.svg 에서 생성) 의 도형 목록을 CAShapeLayer 로 펼친 것이다.
 /// 모든 프로퍼티 변경은 호출자가 CATransaction 액션을 끈 상태에서 한다.
 /// 메인 스레드에서만 사용한다 (DesktopWindow 가 유일한 호출자)
@@ -13,6 +13,9 @@ final class CatLayer: CALayer {
     private let bodyLayer = CALayer()
     private let labelLayer = CATextLayer()
     private let badgeLayer = CATextLayer()
+    /// 머리 위 말풍선. 정적이다 — bubble 문자열이 바뀔 때만 path·문자열을 다시 만든다.
+    private let bubbleLayer = CAShapeLayer()
+    private let bubbleTextLayer = CATextLayer()
     /// 팔레트가 바뀌면 색만 갈아끼울 자리들(경로는 그대로 둔다).
     private var furSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
     private var furDarkSlots: [(layer: CAShapeLayer, isStroke: Bool)] = []
@@ -39,7 +42,20 @@ final class CatLayer: CALayer {
         badgeLayer.alignmentMode = .left
         badgeLayer.contentsScale = contentsScale
 
-        [tailA, tailB, bodyLayer, labelLayer, badgeLayer].forEach(addSublayer)
+        // 말풍선은 고양이 상자와 같은 좌표계에서 그린다(경로 좌표 = 고양이 좌표).
+        bubbleLayer.anchorPoint = .zero
+        bubbleLayer.bounds = bounds
+        bubbleLayer.position = .zero
+        bubbleLayer.fillColor = NSColor.white.withAlphaComponent(0.95).cgColor
+        bubbleLayer.strokeColor = nil
+        bubbleLayer.contentsScale = contentsScale
+
+        bubbleTextLayer.alignmentMode = .center
+        bubbleTextLayer.isWrapped = false
+        bubbleTextLayer.truncationMode = .end
+        bubbleTextLayer.contentsScale = contentsScale
+
+        [tailA, tailB, bodyLayer, labelLayer, badgeLayer, bubbleLayer, bubbleTextLayer].forEach(addSublayer)
         apply(placement)
     }
 
@@ -91,6 +107,10 @@ final class CatLayer: CALayer {
                 ? Self.outlinedLabel("+\(p.overflowCount)", maxWidth: badgeLayer.bounds.width)
                 : nil
             badgeLayer.isHidden = p.overflowCount == 0
+        }
+
+        if first || p.bubble != previous.bubble {
+            applyBubble(p.bubble)
         }
     }
 
@@ -182,20 +202,84 @@ final class CatLayer: CALayer {
         }
     }
 
+    // MARK: - 말풍선
+
+    /// 고양이 좌표계 기준 치수. 폭 최대 130 은 슬롯 폭 140 보다 좁아 이웃과 겹치지 않는다.
+    private enum Bubble {
+        static let centerX: CGFloat = 32
+        static let tipY: CGFloat = 66      // 아래 꼭지 끝(머리 바로 위)
+        static let notch: CGFloat = 5      // 꼭지 높이
+        static let height: CGFloat = 18
+        static let maxWidth: CGFloat = 130
+        static let padding: CGFloat = 16   // 좌우 합계
+        static let corner: CGFloat = 6
+        static let fontSize: CGFloat = 10
+    }
+
+    private func applyBubble(_ text: String?) {
+        guard let text else {
+            bubbleLayer.isHidden = true
+            bubbleTextLayer.isHidden = true
+            bubbleTextLayer.string = nil
+            bubbleLayer.path = nil
+            return
+        }
+        let attributed = Self.fitted(text, maxWidth: Bubble.maxWidth - Bubble.padding, Self.attributedBubble)
+        let width = min(Bubble.maxWidth, ceil(attributed.size().width) + Bubble.padding)
+        let bottom = Bubble.tipY + Bubble.notch
+
+        bubbleLayer.path = Self.bubblePath(width: width)
+        bubbleTextLayer.string = attributed
+        bubbleTextLayer.frame = CGRect(
+            x: Bubble.centerX - width / 2 + Bubble.padding / 2,
+            y: bottom + 1,
+            width: width - Bubble.padding,
+            height: 14
+        )
+        bubbleLayer.isHidden = false
+        bubbleTextLayer.isHidden = false
+    }
+
+    /// 둥근 사각형 + 아래로 뻗은 삼각 꼭지를 한 경로에 담는다.
+    /// 꼭지 밑변을 사각형 안쪽으로 0.5 겹쳐 이음매가 보이지 않게 한다.
+    private static func bubblePath(width: CGFloat) -> CGPath {
+        let bottom = Bubble.tipY + Bubble.notch
+        let rect = CGRect(x: Bubble.centerX - width / 2, y: bottom, width: width, height: Bubble.height)
+        let path = CGMutablePath()
+        path.addRoundedRect(in: rect, cornerWidth: Bubble.corner, cornerHeight: Bubble.corner)
+        path.move(to: CGPoint(x: Bubble.centerX - 5, y: bottom + 0.5))
+        path.addLine(to: CGPoint(x: Bubble.centerX, y: Bubble.tipY))
+        path.addLine(to: CGPoint(x: Bubble.centerX + 5, y: bottom + 0.5))
+        path.closeSubpath()
+        return path
+    }
+
+    private static func attributedBubble(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: Bubble.fontSize),
+            .foregroundColor: NSColor(srgbRed: 0x22 / 255, green: 0x1F / 255, blue: 0x22 / 255, alpha: 1),
+        ])
+    }
+
     // MARK: - 라벨
 
     /// 흰 글자 + 검은 외곽선(배경 박스 없음). 음수 strokeWidth = fill + stroke.
-    ///
+    private static func outlinedLabel(_ text: String, maxWidth: CGFloat) -> NSAttributedString {
+        fitted(text, maxWidth: maxWidth, attributedLabel)
+    }
+
     /// CATextLayer 는 truncationMode 를 .end 로 둬도 폭을 넘는 attributed string 을
     /// 아예 그리지 않는다(음수 strokeWidth 조합에서 재현: 렌더 픽셀 0). 그래서
     /// 레이어에 맡기지 않고 문자열을 직접 잘라서 넘긴다.
-    private static func outlinedLabel(_ text: String, maxWidth: CGFloat) -> NSAttributedString {
-        var result = attributedLabel(text)
+    private static func fitted(
+        _ text: String, maxWidth: CGFloat, _ make: (String) -> NSAttributedString
+    ) -> NSAttributedString {
+        var result = make(text)
         guard result.size().width > maxWidth else { return result }
         var chars = Array(text)
         while chars.count > 1 {
             chars.removeLast()
-            result = attributedLabel(String(chars) + "…")
+            result = make(String(chars) + "…")
             if result.size().width <= maxWidth { break }
         }
         return result
