@@ -2445,3 +2445,46 @@ git commit -m "chore: .app 번들 스크립트, README, 전력 측정 기록"
 - [ ] Step 3: `scripts/generate-cat-art.sh` 작성·실행 → `CatArt.generated.swift` 생성, `swift build` 통과(아직 미사용이어도 됨). Commit: "feat: SVG→Swift 고양이 아트 변환 파이프라인"
 - [ ] Step 4: `CatShapes.swift` 팔레트 교체 + `CatLayer.swift` CatArt 기반 재작성 → build, test, 시각 확인. Commit: "feat: 투톤 일러스트 고양이 디자인 적용"
 - [ ] Step 5: README 절 추가. Commit: "docs: 직접 그린 SVG 넣는 법"
+
+---
+
+### Task 14: 말풍선 — 세션 제목 한 줄 요약
+
+사용자 요청(2026-09-07). 고양이 머리 위에 세션 제목(Claude Code 가 transcript 에 기록하는 `aiTitle`)을
+말풍선으로 띄운다. 새끼에는 붙이지 않는다. Task 13 완료 후 실행.
+
+**데이터 소스:** `~/.claude/projects/<encodedCwd>/<sessionId>.jsonl` (세션 transcript). 파일 끝에
+`{"type":"ai-title","aiTitle":"..."}` 줄이 주기적으로 append 된다(`lastPrompt` 줄과 함께). 제목이 한 번도
+안 붙은 세션도 있다 → 말풍선 없음.
+
+**Files:**
+- Modify: `Sources/ClaudeCatsCore/FileSystem.swift` — 프로토콜에 `func readTail(_ url: URL, maxBytes: Int) throws -> Data` 추가. `RealFileSystem`: `FileHandle(forReadingFrom:)`, `seek(toOffset: max(0, size - maxBytes))`, `readToEnd()`.
+- Modify: `Tests/ClaudeCatsCoreTests/FakeFileSystem.swift` — `readTail` = 데이터 suffix, `readCount` 증가.
+- Modify: `Sources/ClaudeCatsCore/Models.swift` — `Session.title: String?` (init 파라미터 기본값 nil, Equatable 에 포함).
+- Modify: `Sources/ClaudeCatsCore/StateCollector.swift`:
+  - `projectDir(for:)` 를 `projectRoot(for:now:) -> URL?` 로 일반화: `projects/<encodeCwd(cwd)>` 아래에 `<id>.jsonl` **또는** `<id>/` 가 있으면 그 디렉터리; 없으면 `projects/*` 를 한 번 훑어 같은 조건으로 찾는다. 캐시·60초 재시도 정책은 기존과 동일. 서브에이전트 = `root/<id>/subagents`, transcript = `root/<id>.jsonl`.
+  - 새 캐시 `titleCache: [sessionId: (modified: Date, readAt: Date, title: String?)]`, `titleRefreshInterval: TimeInterval = 10`, `titleTailBytes = 262_144`.
+  - **모든** 살아있는 interactive 세션(idle 포함)에 대해 transcript 를 `stat`. 캐시가 없거나 (`mtime != cached.modified` **그리고** `now - cached.readAt >= titleRefreshInterval`) 일 때만 `readTail`. 파싱: UTF-8 로 디코드(잘린 앞부분은 `String(decoding:)` 이 대체문자로 처리), `\n` 으로 나눈 뒤 **첫 조각은 버리고**(잘렸을 수 있음) 뒤에서부터 `"type":"ai-title"` 를 포함하는 첫 줄을 `JSONDecoder` 로 `{aiTitle: String}` 디코드. 없으면 **이전 제목 유지**(긴 작업 중엔 꼬리에 제목 줄이 없을 수 있음). transcript 가 없으면 nil.
+  - `session.title = 캐시 값`. 캐시는 `seenIds` 기준으로 매 틱 정리.
+- Modify: `Sources/ClaudeCatsCore/Scene.swift` — `CatPlacement.bubble: String?` (init 파라미터, 기본값 nil). 세션 고양이는 `session.title`(빈 문자열은 nil 취급), 새끼는 nil.
+- Modify: `Sources/ClaudeCats/CatLayer.swift` — `bubbleLayer: CAShapeLayer`(둥근 사각형 + 아래 꼭지 path 하나, fill 흰색 alpha 0.95, stroke 없음) + `bubbleTextLayer: CATextLayer`(10pt system, 색 `#221f22`, 중앙 정렬, 배경 없음). 배치: 꼭지 끝 (32, 66), 사각형 높이 18, 폭 = min(130, 텍스트폭 + 16), 가로 중앙 32. `bubble` 이 바뀔 때만 텍스트·path 갱신(기존 조건부 apply 패턴). `bubble == nil` 이면 둘 다 `isHidden`. `setContentsScale` 이 두 레이어도 포함(서브레이어 walk 이므로 자동). 텍스트는 기존 truncation 헬퍼로 폭 114 에 맞춰 자른다.
+- Tests: `Tests/ClaudeCatsCoreTests/FakeFileSystemTests.swift`(readTail), `StateCollectorTitleTests.swift`(신규), `SceneTests.swift`(bubble 전파), `Fixtures.swift`(`transcriptPath(encodedCwd:sessionId:)`, `titleLine(_:)`, `promptLine(_:)`).
+
+**테스트 목록 (StateCollectorTitleTests):**
+- `titleParsedFromTail`: transcript 에 메시지 줄 여러 개 + `titleLine("A")` + `promptLine` + `titleLine("B")` → title == "B".
+- `truncatedFirstLineIgnored`: 꼬리 256KB 경계가 줄 중간을 자르는 큰 파일(앞에 300KB 더미 줄)에서도 마지막 제목이 나온다.
+- `notReReadWhenMtimeUnchanged`: 두 번 collect, `readCount[transcript] == 1`.
+- `notReReadWithin10SecondsEvenIfMtimeChanged`: mtime 갱신 후 5초 뒤 collect → readCount 1, 12초 뒤 → 2.
+- `previousTitleKeptWhenTailHasNoTitle`: 제목 읽힌 뒤 파일 꼬리를 제목 없는 줄로 교체(mtime, 12초 경과) → 여전히 이전 제목.
+- `idleSessionsGetTitlesToo`: status idle 세션도 title 채워짐.
+- `transcriptFoundViaGlobWhenEncodedCwdMisses`: 인코딩 추정 디렉터리가 없고 `projects/-weird/<id>.jsonl` 만 있을 때 title 나옴; `subagents` 없는 세션도 root 를 찾는다.
+- `noTranscriptGivesNilTitle`.
+- `titleChangeChangesSnapshotEquality`: 제목만 바뀐 두 스냅샷은 `!=`.
+- 기존 서브에이전트 테스트는 전부 그대로 통과해야 한다(root 일반화가 회귀 없어야 함).
+
+**완료 조건:** `swift build` 경고 0, `swift test` 전부 통과(기존 44 + 신규), 앱 실행 스크린샷에서 제목 있는 세션 고양이 위에 말풍선, 제목 없는 세션·새끼는 말풍선 없음, 이웃 말풍선이 겹치지 않음. 유휴 시 틱 비용이 세션당 `stat` 1회 추가로 그침을 코드로 보장(readTail 은 mtime 변경 + 10초 경과 시에만).
+
+- [ ] Step 1: FileSystem.readTail + Fake + 테스트 → commit "feat: FileSystem.readTail"
+- [ ] Step 2: Session.title, projectRoot 일반화, titleCache, StateCollectorTitleTests → commit "feat: 세션 제목 수집(transcript 꼬리 읽기, 10초 스로틀)"
+- [ ] Step 3: CatPlacement.bubble + SceneTests → commit "feat: Scene 말풍선 텍스트 전파"
+- [ ] Step 4: CatLayer 말풍선 레이어 + 시각 확인 → commit "feat: 고양이 머리 위 세션 제목 말풍선"
