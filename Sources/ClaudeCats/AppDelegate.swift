@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let windowPlacementKey = "windowPlacement"
     /// 고양이 종류 선택(`CatConcept` raw value). 키가 없으면 `.team`(푹신캣).
     private static let catConceptKey = "catConcept"
+    /// Dock 아이콘 표시 여부. 키가 없으면 false(원래대로 메뉴바 전용 accessory).
+    /// 노치 MacBook 등 메뉴바가 꽉 차 아이콘이 숨는 환경에서 켜면 Dock 으로 조작한다.
+    static let showDockIconKey = "showDockIcon"
 
     private var window: DesktopWindow!
     private var controller: AppController!
@@ -60,11 +63,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 defaults.set(concept.rawValue, forKey: Self.catConceptKey)
                 self.window.setConcept(concept)
+            },
+            onToggleDockIcon: { [weak self] visible in
+                guard let self else { return }
+                defaults.set(visible, forKey: Self.showDockIconKey)
+                // 런타임에 정책을 바꾸면 Dock 아이콘이 즉시 붙거나 사라진다.
+                NSApp.setActivationPolicy(visible ? .regular : .accessory)
+                self.menu.setDockIconVisible(visible)
             }
         )
         menu.setPreferredDisplayName(preferredDisplay)
         menu.setPlacement(placement)
         menu.setConcept(concept)
+        menu.setDockIconVisible(defaults.bool(forKey: Self.showDockIconKey))
         controller.onSnapshot = { [weak self] snapshot in self?.menu.update(with: snapshot) }
 
         power = PowerMonitor()
@@ -77,5 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.power.setOnBattery(onBattery)
         }
         controller.setMode(PowerPolicy.mode(for: power.state))
+    }
+
+    /// Dock 아이콘 우클릭 메뉴. 메뉴바 아이콘이 노치 뒤로 숨어도 여기서 같은 조작을 한다.
+    /// `menu` 는 IUO 라 `applicationDidFinishLaunching` 전에 Dock 이 물으면 nil 일 수 있다
+    /// (이전에 Dock 을 켠 사용자는 시작 직후 아이콘이 뜬다). nil 이면 기본 Dock 메뉴로 폴백.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        menu?.dockMenu
     }
 }

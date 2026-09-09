@@ -18,6 +18,11 @@ final class StatusMenu: NSObject {
     private let conceptItem = NSMenuItem(title: "고양이 종류", action: nil, keyEquivalent: "")
     private let conceptMenu = NSMenu()
     private let hooksItem = NSMenuItem(title: "알림 연동", action: #selector(toggleHooks), keyEquivalent: "")
+    /// Dock 아이콘 표시 토글. 노치 MacBook 처럼 메뉴바가 꽉 차 아이콘이 숨는 환경에서
+    /// 조작 창구를 확보한다(켜면 `.regular`, 끄면 원래대로 메뉴바 전용 `.accessory`).
+    private let dockIconItem = NSMenuItem(title: "Dock 아이콘 표시", action: #selector(toggleDockIcon), keyEquivalent: "")
+    /// Dock 우클릭 메뉴로도 그대로 쓰기 위해 만든 메뉴를 붙잡아 둔다.
+    private var builtMenu: NSMenu?
     /// 읽기 전용 버전 줄. 번들에 박힌 커밋을 그대로 보여준다.
     private let versionItem = NSMenuItem(title: "버전", action: nil, keyEquivalent: "")
     private let updateItem = NSMenuItem(title: "업데이트 확인…", action: #selector(updateAction), keyEquivalent: "")
@@ -29,6 +34,7 @@ final class StatusMenu: NSObject {
     private let onDisplaySelect: (String?) -> Void
     private let onPlacementSelect: (WindowPlacement) -> Void
     private let onConceptSelect: (CatConcept) -> Void
+    private let onToggleDockIcon: (Bool) -> Void
     private let updater = Updater()
     private var paused = false
     private var preferredDisplayName: String?
@@ -44,13 +50,15 @@ final class StatusMenu: NSObject {
         onRefresh: @escaping () -> Void,
         onDisplaySelect: @escaping (String?) -> Void,
         onPlacementSelect: @escaping (WindowPlacement) -> Void,
-        onConceptSelect: @escaping (CatConcept) -> Void
+        onConceptSelect: @escaping (CatConcept) -> Void,
+        onToggleDockIcon: @escaping (Bool) -> Void
     ) {
         self.onPauseToggle = onPauseToggle
         self.onRefresh = onRefresh
         self.onDisplaySelect = onDisplaySelect
         self.onPlacementSelect = onPlacementSelect
         self.onConceptSelect = onConceptSelect
+        self.onToggleDockIcon = onToggleDockIcon
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -76,10 +84,10 @@ final class StatusMenu: NSObject {
         healthItem.isEnabled = false                                   // 읽기 전용 경고 줄
         healthItem.isHidden = true                                     // 문제가 있을 때만 보인다
         versionItem.isEnabled = false                                  // 읽기 전용 버전 줄
-        for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, conceptItem, hooksItem] {
+        for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, conceptItem, hooksItem, dockIconItem] {
             entry.isEnabled = true
         }
-        for entry in [pauseItem, refresh, loginItem, hooksItem, updateItem, autoUpdateItem] {
+        for entry in [pauseItem, refresh, loginItem, hooksItem, updateItem, autoUpdateItem, dockIconItem] {
             entry.target = self
         }
         // quit 은 target 없이 응답 체인을 타고 NSApp.terminate 로 간다.
@@ -112,10 +120,12 @@ final class StatusMenu: NSObject {
         menu.addItem(conceptItem)
         menu.addItem(hooksItem)
         menu.addItem(.separator())
+        menu.addItem(dockIconItem)
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(quit)
         item.menu = menu
+        builtMenu = menu
         updateLoginState()
         updateHooksState()
         rebuildDisplayMenu()
@@ -125,6 +135,22 @@ final class StatusMenu: NSObject {
         updater.onChange = { [weak self] in self?.renderUpdate() }
         renderUpdate()
         updater.scheduleFirstCheck()
+    }
+
+    /// Dock 우클릭 메뉴. 상태바 아이템 메뉴와 **같은 인스턴스를 넘기면** Dock 트래킹이
+    /// 상태바 메뉴의 내부 상태를 흔들어 이후 상태바 메뉴가 안 열릴 수 있다. 그래서 매번
+    /// 복제본을 넘긴다(target/action 은 참조로 따라오고, 체크 표시는 현재 상태를 스냅샷).
+    var dockMenu: NSMenu? { builtMenu?.copy() as? NSMenu }
+
+    /// Dock 아이콘 표시 상태를 메뉴 체크 표시에 반영한다(값은 AppDelegate 가 소유).
+    func setDockIconVisible(_ visible: Bool) {
+        dockIconItem.state = visible ? .on : .off
+    }
+
+    @objc private func toggleDockIcon() {
+        let next = dockIconItem.state != .on
+        dockIconItem.state = next ? .on : .off
+        onToggleDockIcon(next)
     }
 
     /// 현재 선택(자동 = nil)을 알려준다. 메뉴 체크 표시에만 쓴다.
