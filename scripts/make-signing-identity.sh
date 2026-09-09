@@ -50,6 +50,8 @@ fi
 command -v openssl >/dev/null 2>&1 || {
   echo "openssl 을 찾지 못했다 — 인증서를 만들 수 없다" >&2; exit 1; }
 
+# 개인 키와 .p12 는 이 mktemp -d 디렉터리(0700, 소유자만 접근)에만 두고, EXIT 트랩이
+# 스크립트가 어떻게 끝나든 통째로 지운다 — group/other 가 읽을 틈을 주지 않는다.
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/cc-signing.XXXXXX")"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -92,11 +94,13 @@ if ! openssl pkcs12 -export -inkey "$KEY" -in "$CERT" -out "$P12" \
     echo ".p12 생성 실패" >&2; exit 1; }
 fi
 
-# 키체인에 넣는다. -T 로 codesign·security 가 이 키를 쓸 수 있게 미리 허용 목록에 올린다.
+# 키체인에 넣는다. -T /usr/bin/codesign 하나만 준다 — 이 개인 키의 신뢰 앱 ACL 에
+# codesign 만 올린다(security 는 뺀다: 최소 권한). codesign 이 프롬프트 없이 키를 쓰는
+# 건 아래 set-key-partition-list 의 파티션 ID 목록 덕이지 이 -T 목록 덕이 아니다.
 # add-trusted-cert 는 하지 않는다 — SSL 신뢰가 아니라 코드 서명에만 쓸 것이고, 신뢰
 # 앵커 등록(admin 도메인)은 sudo/GUI 를 부른다. 코드 서명에는 키체인에 있기만 하면 된다.
 if ! security import "$P12" -k "$KEYCHAIN" -P "$P12_PW" \
-      -T /usr/bin/codesign -T /usr/bin/security >/dev/null 2>&1; then
+      -T /usr/bin/codesign >/dev/null 2>&1; then
   echo "키체인($KEYCHAIN)으로 import 실패 — 키체인이 잠겨 있는지 확인해 주세요" >&2
   exit 1
 fi
