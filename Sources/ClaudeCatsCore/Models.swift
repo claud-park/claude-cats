@@ -93,7 +93,7 @@ public struct Session: Sendable, Equatable, Identifiable {
 /// 한 틱에 세션 파일을 몇 개 보고 몇 개를 받아들였는지, 못 받아들인 건 왜인지.
 ///
 /// 이 앱은 `~/.claude` 의 문서화되지 않은 내부 구조에 기대고 있어서 Claude Code 업데이트로
-/// 조용히 깨질 수 있다. 그때 "고양이 0마리"와 "파일은 있는데 하나도 못 읽었다"를 구분하지
+/// 조용히 깨질 수 있다. 그때 "와글와글 0마리"와 "파일은 있는데 하나도 못 읽었다"를 구분하지
 /// 못하면 사용자가 알아차릴 방법이 없다. 그 구분을 메뉴바에 한 줄로 드러내려고 센다.
 public struct CollectorHealth: Equatable, Sendable {
     /// `sessions/` 에서 본 `.json` 파일 수.
@@ -123,7 +123,7 @@ public struct CollectorHealth: Equatable, Sendable {
     /// 구조가 바뀌었을 가능성이 가장 큰 자리다.
     ///
     /// 실패가 하나도 없는데 accepted 가 0 이면(전부 죽은 pid 이거나 전부 비대화형) 여기
-    /// 안 들어온다 — 그건 정상이고 "고양이 0마리"가 맞는 답이다. 그때까지 구조 변경을
+    /// 안 들어온다 — 그건 정상이고 "와글와글 0마리"가 맞는 답이다. 그때까지 구조 변경을
     /// 의심하게 만들면 경고가 늑대소년이 된다.
     public var readNothing: Bool { sessionFiles > 0 && accepted == 0 && failures > 0 }
     /// 일부만 실패했다. 못 읽은 파일 수(비대화형·죽은 pid 는 정상이라 세지 않는다).
