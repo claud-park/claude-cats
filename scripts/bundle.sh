@@ -18,6 +18,9 @@ fi
 REPO_ROOT="$(pwd -P)"
 if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 &&
    git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
+  # 스크립트 위치가 아니라 git 이 말하는 최상위를 쓴다 — 심볼릭 링크를 타고 들어왔거나
+  # 서브디렉터리에서 불렸을 때 `pwd -P` 와 갈릴 수 있고, 앱은 이 경로에 대고 pull 한다.
+  REPO_ROOT="$(git -C "$REPO_ROOT" rev-parse --show-toplevel)"
   COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
   COMMIT_DATE="$(git -C "$REPO_ROOT" log -1 --format=%cd --date=short)"
   BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"

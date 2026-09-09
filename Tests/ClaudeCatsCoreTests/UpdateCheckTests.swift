@@ -58,6 +58,51 @@ import Testing
         #expect(UpdateCheck.status(revListCount: "  \n", logLine: nil, statusPorcelain: "") == .offline("git rev-list 가 아무것도 내놓지 않았다"))
     }
 
+    // MARK: - stampProblem
+
+    @Test func stampedRepoWithGitDirIsUsable() {
+        #expect(UpdateCheck.stampProblem(repoRoot: "/Users/nobody/claude-cats", branch: "main", gitDirExists: true) == nil)
+    }
+
+    @Test func unstampedRepoIsNotAGitRepo() {
+        #expect(UpdateCheck.stampProblem(repoRoot: "unknown", branch: "main", gitDirExists: true) == .notAGitRepo)
+        #expect(UpdateCheck.stampProblem(repoRoot: "  ", branch: "main", gitDirExists: true) == .notAGitRepo)
+    }
+
+    /// 저장소를 옮기거나 지웠다. 없는 자리에 대고 fetch 하지 않는다.
+    @Test func missingGitDirIsNotAGitRepo() {
+        #expect(UpdateCheck.stampProblem(repoRoot: "/Users/nobody/claude-cats", branch: "main", gitDirExists: false) == .notAGitRepo)
+    }
+
+    /// bundle.sh 는 detached HEAD 에서 브랜치 이름 대신 `HEAD` 를 박는다.
+    @Test func detachedHeadStampCannotBeFollowed() {
+        #expect(UpdateCheck.stampProblem(repoRoot: "/Users/nobody/claude-cats", branch: "HEAD", gitDirExists: true) == .detachedHead)
+        #expect(UpdateCheck.stampProblem(repoRoot: "/Users/nobody/claude-cats", branch: "unknown", gitDirExists: true) == .detachedHead)
+        #expect(UpdateCheck.stampProblem(repoRoot: "/Users/nobody/claude-cats", branch: "", gitDirExists: true) == .detachedHead)
+    }
+
+    /// 저장소부터 본다 — 저장소를 모르면 브랜치가 뭐든 상관없다.
+    @Test func repoProblemWinsOverBranchProblem() {
+        #expect(UpdateCheck.stampProblem(repoRoot: "unknown", branch: "HEAD", gitDirExists: false) == .notAGitRepo)
+    }
+
+    // MARK: - revListRange
+
+    /// 기준은 저장소 HEAD 가 아니라 **번들이 박고 나온 커밋**이다. pull 은 됐는데 빌드가
+    /// 깨진 뒤에도 다음 확인에서 다시 "뒤처짐"이 나와야 한다.
+    @Test func rangeIsMeasuredFromTheRunningBundlesCommit() {
+        #expect(UpdateCheck.revListRange(bundleCommit: "a315cac", branch: "main") == "a315cac..origin/main")
+    }
+
+    @Test func unknownCommitFallsBackToHead() {
+        #expect(UpdateCheck.revListRange(bundleCommit: "unknown", branch: "main") == "HEAD..origin/main")
+        #expect(UpdateCheck.revListRange(bundleCommit: "", branch: "main") == "HEAD..origin/main")
+    }
+
+    @Test func branchWithSlashesSurvives() {
+        #expect(UpdateCheck.revListRange(bundleCommit: "88a6fa4", branch: "feat/self-update") == "88a6fa4..origin/feat/self-update")
+    }
+
     // MARK: - targetInstallDir
 
     @Test func installedAppUpdatesInPlace() {

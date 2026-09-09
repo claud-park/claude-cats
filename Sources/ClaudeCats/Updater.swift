@@ -26,7 +26,7 @@ final class Updater {
 
     /// `scripts/bundle.sh` 가 Info.plist 에 박아 둔 값들.
     struct Stamp: Equatable {
-        static let unknown = "unknown"
+        static let unknown = UpdateCheck.unknown
 
         var repoRoot: String
         var commit: String
@@ -85,15 +85,16 @@ final class Updater {
         case .installing: "업데이트 중…"
         case .checked(.behind(let commits, _)): "업데이트 설치 (\(commits)개 커밋)"
         case .checked(.notAGitRepo): "업데이트: 소스 저장소를 모름"
+        case .checked(.detachedHead): "업데이트 불가 (detached HEAD)"
         case .checked(.dirtyTree): "업데이트: 로컬 변경 있음"
         default: "업데이트 확인…"
         }
     }
 
-    /// 눌러서 뭔가 할 수 있나. 도는 중이거나 저장소를 모르면 잠근다.
+    /// 눌러서 뭔가 할 수 있나. 도는 중이거나 스탬프가 못 쓸 것이면 잠근다.
     var isActionable: Bool {
         switch phase {
-        case .checking, .installing, .checked(.notAGitRepo): false
+        case .checking, .installing, .checked(.notAGitRepo), .checked(.detachedHead): false
         default: true
         }
     }
@@ -102,7 +103,7 @@ final class Updater {
 
     /// 실행 30초 뒤 한 번. 반복 타이머는 만들지 않는다 — 그 뒤는 `checkIfDue()` 가 맡는다.
     func scheduleFirstCheck() {
-        guard isGitRepo else { return }
+        guard stampProblem == nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstCheckDelay) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.autoCheckEnabled, self.phase == .idle else { return }
@@ -113,7 +114,7 @@ final class Updater {
 
     /// 메뉴가 열릴 때마다 불린다. 마지막 확인이 24시간보다 오래됐을 때만 실제로 확인한다.
     func checkIfDue() {
-        guard autoCheckEnabled, isGitRepo, isActionable else { return }
+        guard autoCheckEnabled, stampProblem == nil, isActionable else { return }
         if let last = defaults.object(forKey: Self.lastCheckKey) as? Date,
            Date().timeIntervalSince(last) < Self.autoCheckInterval {
             return
@@ -126,17 +127,18 @@ final class Updater {
     /// `userInitiated` 면 결과를 창으로 알린다. 자동 확인은 조용히 메뉴만 바꾼다.
     func check(userInitiated: Bool) {
         guard phase != .checking, phase != .installing else { return }
-        guard isGitRepo else {
-            log.info("no source repo stamped in the bundle")
-            setPhase(.checked(.notAGitRepo))
-            if userInitiated { presentResult(.notAGitRepo) }
+        if let problem = stampProblem {
+            log.info("unusable stamp: \(String(describing: problem), privacy: .public)")
+            setPhase(.checked(problem))
+            if userInitiated { presentResult(problem) }
             return
         }
         setPhase(.checking)
         let repo = stamp.repoRoot
         let branch = stamp.branch
+        let commit = stamp.commit
         queue.async { [weak self] in
-            let status = Self.performCheck(repo: repo, branch: branch)
+            let status = Self.performCheck(repo: repo, branch: branch, commit: commit)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
@@ -150,8 +152,13 @@ final class Updater {
     }
 
     /// 확인의 실제 알맹이. 백그라운드 큐 전용.
-    private nonisolated static func performCheck(repo: String, branch: String) -> UpdateStatus {
-        appendLog("== 확인 \(timestamp()) — \(repo) (\(branch))")
+    private nonisolated static func performCheck(
+        repo: String,
+        branch: String,
+        commit: String
+    ) -> UpdateStatus {
+        defer { trimLog() }
+        appendLog("== 확인 \(timestamp()) — \(repo) (\(branch) @ \(commit))")
         let fetch = Shell.run("git", ["-C", repo, "fetch", "--quiet", "origin", branch],
                               cwd: repo, timeout: 20)
         if fetch.status != 0 {
@@ -165,8 +172,16 @@ final class Updater {
             return .offline(reason(fetch))
         }
 
-        let count = Shell.run("git", ["-C", repo, "rev-list", "--count", "HEAD..origin/\(branch)"],
-                              cwd: repo, timeout: 10)
+        // 기준은 저장소 HEAD 가 아니라 **이 번들이 박고 나온 커밋**이다(revListRange 주석 참고).
+        let range = UpdateCheck.revListRange(bundleCommit: commit, branch: branch)
+        let headRange = UpdateCheck.revListRange(bundleCommit: UpdateCheck.unknown, branch: branch)
+        var count = Shell.run("git", ["-C", repo, "rev-list", "--count", range], cwd: repo, timeout: 10)
+        if count.status != 0, range != headRange {
+            // 스탬프 커밋이 저장소에서 사라졌다(리베이스·강제 푸시·얕은 클론). 영영 못 세느니
+            // HEAD 기준으로 물러선다 — 그러면 최소한 "저장소가 앞서 있다"는 알 수 있다.
+            appendLog("\(range) 를 못 셌다 — HEAD 기준으로 물러선다\n\(count.output)")
+            count = Shell.run("git", ["-C", repo, "rev-list", "--count", headRange], cwd: repo, timeout: 10)
+        }
         guard count.status == 0 else {
             appendLog("rev-list 실패(\(count.status))\n\(count.output)")
             return .offline(reason(count))
@@ -205,8 +220,9 @@ final class Updater {
     /// 우리를 죽인다 — 여기서 앱을 내리지 않는 이유다. 실패는 **기존 앱을 건드리기 전에** 나므로
     /// 창 하나 띄우고 하던 일을 계속하면 된다.
     func install() {
-        guard phase != .installing, isGitRepo else { return }
+        guard phase != .installing, stampProblem == nil else { return }
         let repo = stamp.repoRoot
+        let branch = stamp.branch
         let target = UpdateCheck.targetInstallDir(
             runningBundlePath: Bundle.main.bundlePath,
             repoRoot: repo
@@ -218,11 +234,13 @@ final class Updater {
         setPhase(.installing)
 
         queue.async { [weak self] in
-            Self.appendLog("== 설치 \(Self.timestamp()) — \(repo) → \(target) (pid \(pid))")
+            Self.appendLog("== 설치 \(Self.timestamp()) — \(repo) (\(branch)) → \(target) (pid \(pid))")
             // 빌드가 길다(release 콜드 빌드는 분 단위). 출력은 그때그때 로그로 흘린다.
+            // 브랜치를 넘기는 이유: 스크립트는 "지금 체크아웃된 것"을 당기는데, 그게 이 번들이
+            // 나온 브랜치와 다를 수 있다. 다르면 스크립트가 아무것도 안 하고 나간다.
             let result = Shell.run(
                 "/bin/bash",
-                ["\(repo)/scripts/install.sh", "--self-update", target, "\(pid)"],
+                ["\(repo)/scripts/install.sh", "--self-update", target, "\(pid)", branch],
                 cwd: repo,
                 timeout: 15 * 60,
                 onOutput: { chunk in Self.appendLog(chunk, newline: false) }
@@ -271,6 +289,14 @@ final class Updater {
             변경을 커밋하거나 치운 뒤 다시 확인해 주세요.
             """
             alert.addButton(withTitle: "확인")
+        case .detachedHead:
+            alert.messageText = "업데이트할 수 없습니다 (detached HEAD)"
+            alert.informativeText = """
+            이 번들은 브랜치가 아닌 상태(detached HEAD)에서 빌드됐습니다.
+            어느 브랜치를 따라가야 할지 알 수 없어 아무것도 하지 않습니다.
+            \(stamp.repoRoot) 에서 브랜치를 체크아웃하고 다시 설치해 주세요.
+            """
+            alert.addButton(withTitle: "확인")
         case .notAGitRepo:
             alert.messageText = "소스 저장소를 모릅니다"
             alert.informativeText = """
@@ -313,10 +339,14 @@ final class Updater {
 
     // MARK: - 상태
 
-    private var isGitRepo: Bool {
-        guard stamp.repoRoot != Stamp.unknown, !stamp.repoRoot.isEmpty else { return false }
-        // worktree 는 `.git` 이 디렉터리가 아니라 파일이다. 존재만 본다.
-        return FileManager.default.fileExists(atPath: stamp.repoRoot + "/.git")
+    /// 스탬프만 보고 업데이트를 시도할 수 있는지. 못 하면 그 이유(판정은 `UpdateCheck`).
+    private var stampProblem: UpdateStatus? {
+        UpdateCheck.stampProblem(
+            repoRoot: stamp.repoRoot,
+            branch: stamp.branch,
+            // worktree 는 `.git` 이 디렉터리가 아니라 파일이다. 존재만 본다.
+            gitDirExists: FileManager.default.fileExists(atPath: stamp.repoRoot + "/.git")
+        )
     }
 
     private func setPhase(_ new: Phase) {
@@ -410,9 +440,18 @@ private enum Shell {
     private static let outputLimit = 64 * 1024
 
     /// `Process` 는 `Sendable` 이 아닌데 감시 타이머가 다른 스레드에서 봐야 한다.
-    /// 보는 건 `isRunning` 과 `terminate()` 둘뿐이고 둘 다 스레드 안전하다.
+    /// 보는 건 `isRunning` 과 종료 요청뿐이고 둘 다 스레드 안전하다.
+    ///
+    /// 끝나면 `release()` 로 참조를 놓는다 — 안 놓으면 이미 죽은 프로세스를 타임아웃
+    /// 시각까지(설치는 15분) 감시 항목이 붙들고 있게 된다.
     private final class Box: @unchecked Sendable {
-        let process = Process()
+        private let lock = NSLock()
+        private var stored: Process?
+
+        init(_ process: Process) { stored = process }
+
+        var process: Process? { lock.withLock { stored } }
+        func release() { lock.withLock { stored = nil } }
     }
 
     /// `onOutput` 은 읽는 족족 불린다(설치 로그 흘리기용). 호출한 큐에서 그대로 실행된다.
@@ -423,8 +462,8 @@ private enum Shell {
         timeout: TimeInterval,
         onOutput: ((String) -> Void)? = nil
     ) -> Result {
-        let box = Box()
-        let process = box.process
+        let process = Process()
+        let box = Box(process)
         // 절대 경로가 아니면 PATH 에서 찾는다(`/usr/bin/env` 가 그 일을 한다).
         if executable.hasPrefix("/") {
             process.executableURL = URL(fileURLWithPath: executable)
@@ -437,6 +476,10 @@ private enum Shell {
 
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchPath
+        // git 메시지를 영어로 못 박는다. 우리는 "couldn't find remote ref" 같은 문구를 보고
+        // "고장"과 "아직 push 안 한 브랜치"를 가르는데, 지역화된 git 에서는 그 글자가 달라진다.
+        environment["LC_ALL"] = "C"
+        environment["LANG"] = "C"
         // 물어보는 순간 타임아웃까지 매달린다. 인증이 필요하면 그냥 실패하는 편이 낫다.
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_PAGER"] = "cat"
@@ -455,8 +498,24 @@ private enum Shell {
             return Result(status: -1, output: "\(executable) 실행 실패: \(error.localizedDescription)", timedOut: false)
         }
 
+        // 자식을 자기 프로세스 그룹의 리더로 만든다. 그래야 타임아웃에서 **손자까지** 같이
+        // 내릴 수 있다 — 스크립트만 죽이면 그 밑의 `swift build` 가 파이프를 계속 붙들고 있어
+        // 아래 읽기 루프가 빌드가 끝날 때까지 안 끝난다(타임아웃이 타임아웃이 아니게 된다).
+        // 부모·자식 양쪽이 부르는 표준 관용구라 어느 쪽이 먼저 도착해도 된다.
+        let childPid = process.processIdentifier
+        _ = setpgid(childPid, childPid)
+
         // 시간이 넘으면 SIGTERM. 파이프가 닫히면서 아래 읽기 루프도 같이 끝난다.
-        let watchdog = DispatchWorkItem { if box.process.isRunning { box.process.terminate() } }
+        let watchdog = DispatchWorkItem {
+            guard let running = box.process, running.isRunning else { return }
+            // 리더가 된 게 **확인될 때만** 그룹째 내린다. setpgid 가 실패했다면 자식은 아직
+            // 우리 그룹에 있고, 그때 `kill(-우리그룹)` 은 앱 자신을 죽인다.
+            if getpgid(childPid) == childPid {
+                kill(-childPid, SIGTERM)
+            } else {
+                running.terminate()
+            }
+        }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
         var collected = Data()
@@ -469,6 +528,7 @@ private enum Shell {
         }
         process.waitUntilExit()
         watchdog.cancel()
+        box.release()
 
         return Result(
             status: process.terminationStatus,

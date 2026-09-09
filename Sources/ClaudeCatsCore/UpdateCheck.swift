@@ -8,6 +8,8 @@ public enum UpdateStatus: Equatable, Sendable {
     case behind(commits: Int, latestSubject: String)
     /// 번들에 소스 저장소가 안 박혀 있거나 그 자리에 `.git` 이 없다(tarball 로 받았거나 저장소를 옮겼다).
     case notAGitRepo
+    /// 브랜치 없이(detached HEAD) 빌드된 번들. 어느 브랜치를 따라갈지 알 수 없다.
+    case detachedHead
     /// git 이 실패했다 — 네트워크·인증·저장소 문제. 사람이 읽을 이유 한 줄.
     case offline(String)
     /// 뒤처져 있는데 작업 트리가 더럽다. `--ff-only` pull 이 로컬 변경을 밟을 수 있어 손대지 않는다.
@@ -19,6 +21,38 @@ public enum UpdateStatus: Equatable, Sendable {
 /// 프로세스 실행(`git fetch` 등)은 앱 타깃(`Updater`)이 하고, 여기서는 그 출력만 읽는다 —
 /// 그래야 "3개 뒤처졌는데 트리가 더럽다" 같은 조합을 네트워크 없이 테스트할 수 있다.
 public enum UpdateCheck {
+    /// `scripts/bundle.sh` 가 못 알아낸 값에 박아 두는 표시.
+    public static let unknown = "unknown"
+
+    /// 번들 스탬프만 보고 "업데이트를 시도해도 되는가"를 정한다. 안 되면 그 이유, 되면 nil.
+    ///
+    /// 여기서 걸러야 없는 저장소에 대고 `fetch` 하거나, 어느 브랜치를 따라갈지도 모르는 채
+    /// `pull` 을 부르는 일이 없다.
+    public static func stampProblem(
+        repoRoot: String,
+        branch: String,
+        gitDirExists: Bool
+    ) -> UpdateStatus? {
+        let root = repoRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !root.isEmpty, root != unknown, gitDirExists else { return .notAGitRepo }
+        let name = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 빌드 당시 detached HEAD 였으면 bundle.sh 가 `HEAD` 를 박는다.
+        guard !name.isEmpty, name != unknown, name != "HEAD" else { return .detachedHead }
+        return nil
+    }
+
+    /// `git rev-list --count` 에 넘길 구간.
+    ///
+    /// 기준은 저장소 HEAD 가 아니라 **지금 도는 번들의 커밋**이다. 둘은 갈라질 수 있다 —
+    /// pull 은 됐는데 빌드가 깨져서 앱이 옛 커밋 그대로인 경우가 그렇다. HEAD 를 기준으로
+    /// 세면 그때 "최신"이라고 말해 버리고, 사용자는 낡은 앱을 든 채 다시는 안내를 못 받는다.
+    /// 스탬프를 모르는 번들(개발 빌드)일 때만 HEAD 로 물러선다.
+    public static func revListRange(bundleCommit: String, branch: String) -> String {
+        let commit = bundleCommit.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = commit.isEmpty || commit == unknown ? "HEAD" : commit
+        return "\(base)..origin/\(branch)"
+    }
+
     /// `git rev-list --count HEAD..origin/<branch>` · `git log -1 --format=%s origin/<branch>` ·
     /// `git status --porcelain` 의 출력을 상태 하나로 접는다.
     ///
