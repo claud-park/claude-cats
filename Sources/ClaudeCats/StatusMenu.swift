@@ -7,6 +7,8 @@ import ServiceManagement
 final class StatusMenu: NSObject {
     private let item: NSStatusItem
     private let summaryItem = NSMenuItem(title: "고양이 0마리", action: nil, keyEquivalent: "")
+    /// 세션 파일을 못 읽었을 때만 보이는 경고 줄. 건강하면 숨긴다.
+    private let healthItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let pauseItem = NSMenuItem(title: "일시정지", action: #selector(togglePause), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "로그인 시 시작", action: #selector(toggleLogin), keyEquivalent: "")
     private let displayItem = NSMenuItem(title: "디스플레이", action: nil, keyEquivalent: "")
@@ -53,6 +55,8 @@ final class StatusMenu: NSObject {
         let quit = NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         summaryItem.isEnabled = false                                  // 읽기 전용 요약 줄
+        healthItem.isEnabled = false                                   // 읽기 전용 경고 줄
+        healthItem.isHidden = true                                     // 문제가 있을 때만 보인다
         for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, hooksItem] {
             entry.isEnabled = true
         }
@@ -70,6 +74,7 @@ final class StatusMenu: NSObject {
         menu.delegate = self
 
         menu.addItem(summaryItem)
+        menu.addItem(healthItem)
         menu.addItem(.separator())
         menu.addItem(pauseItem)
         menu.addItem(refresh)
@@ -146,6 +151,31 @@ final class StatusMenu: NSObject {
         var text = "고양이 \(snapshot.sessions.count)마리 · 작업 중 \(busy)"
         if kittens > 0 { text += " · 새끼 \(kittens)" }
         summaryItem.title = text
+
+        if let warning = Self.healthWarning(snapshot.health) {
+            healthItem.title = warning
+            healthItem.isHidden = false
+        } else {
+            healthItem.isHidden = true
+        }
+    }
+
+    /// 세션 수집 상태를 한 줄로. 정상이면 nil(줄을 숨긴다).
+    ///
+    /// 이 앱은 `~/.claude` 의 문서화되지 않은 구조에 기대므로 Claude Code 업데이트로 조용히
+    /// 깨질 수 있다. 그때 "정말 세션이 없다"와 "파일은 있는데 못 읽었다"가 똑같이
+    /// "고양이 0마리"로 보이면 사용자가 알아차릴 방법이 없다.
+    ///
+    /// 반대로 죽은 pid·비대화형만 있어서 0마리인 건 정상이라 아무것도 띄우지 않는다 —
+    /// 늘 떠 있는 경고는 아무도 안 읽는다.
+    static func healthWarning(_ health: CollectorHealth) -> String? {
+        if health.readNothing {
+            return "⚠️ 세션 파일 \(health.sessionFiles)개를 읽지 못함 — Claude Code 구조가 바뀌었을 수 있음"
+        }
+        if health.failures > 0 {
+            return "⚠️ 세션 파일 \(health.failures)개 읽기 실패"
+        }
+        return nil
     }
 
     @objc private func togglePause() {

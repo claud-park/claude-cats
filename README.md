@@ -12,17 +12,57 @@ busy 세션은 앉은 자세(꼬리가 1초마다 흔들린다), idle 세션은 
 ```bash
 swift build               # 빌드
 .build/debug/ClaudeCats   # 실행 (창 없이 바탕화면에 그린다)
-swift test                # 테스트
+./scripts/test.sh         # 테스트 (Xcode 없이 CLT 만 있어도 돈다 — 아래 각주)
 
-./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성
+./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성 (앱 아이콘 포함)
 open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
+
+./scripts/install.sh      # 번들 생성 + /Applications 설치 + Launch Services 등록
 ```
+
+### 설치
+
+`./scripts/install.sh` (= `./scripts/bundle.sh --install`) 이 번들을 만들어
+`/Applications/ClaudeCats.app` 로 넣고 `lsregister -f` 까지 돌린다. 그 자리에서
+돌고 있던 인스턴스가 있으면 먼저 내리고 설치 후 다시 띄운다(다른 경로 —
+`dist/` 에서 개발용으로 띄워 둔 것 — 은 건드리지 않는다).
+
+**`~/Applications` 는 안 된다.** Finder 사이드바의 "응용 프로그램"·Launchpad·
+Spotlight 는 `/Applications` 를 본다. 홈 폴더 쪽 `~/Applications` 에 넣으면 그 목록
+어디에도 안 뜬다.
+
+설치 위치를 바꾸려면 `DESTDIR=/원하는/경로 ./scripts/install.sh`. 기본값이 아니면
+`lsregister` 와 재실행은 건너뛴다.
+
+### 배포
+
+지금 번들은 **ad-hoc 서명**(`codesign --sign -`)만 한다 — `TeamIdentifier=not set`.
+직접 빌드해서 자기 맥에 설치하는 데는 문제가 없지만, 남에게 `.app`·`.dmg` 를 건네면
+Gatekeeper 가 막는다. 배포하려면 Developer ID 인증서로 서명하고 공증(notarization)
+까지 받아야 한다 — **아직 구현돼 있지 않다.**
+
+앱 아이콘은 `scripts/make-icon.swift` 가 `Design/cats/sitting.svg` 에서 만든다 —
+`#FUR` 계열 플레이스홀더를 팔레트 0번 색으로 채우고, 알파 경계상자를 재서 고양이를
+가운데·8% 여백으로 10가지 크기에 렌더한 뒤 `iconutil` 로 `dist/AppIcon.icns` 를
+굽는다. 그림이 그대로면 다시 굽지 않고, `iconutil` 이 없으면 경고만 남기고
+아이콘 없이 번들을 만든다.
+
+> **`swift test` 대신 `./scripts/test.sh` 를 쓰는 이유** — Xcode 없이 Command Line Tools
+> 만 깔린 맥에서는 `swift test` 가 `no such module 'Testing'` →
+> `Library not loaded: @rpath/Testing.framework/...` 로 실패한다. CLT 안에서
+> `Testing.framework` 와 `lib_TestingInterop.dylib` 가 런타임 검색 경로에 없는 서로 다른
+> 디렉터리에 있기 때문이고, `swiftpm-testing-helper` 가 SIP 보호 바이너리라
+> `DYLD_FRAMEWORK_PATH` 로는 못 고친다. `scripts/test.sh` 는 `xcode-select -p` 가
+> CommandLineTools 를 가리킬 때만 rpath 두 개를 붙여 주고, Xcode 가 있으면 그냥
+> `swift test` 를 부른다. (`Package.swift` 에 `unsafeFlags` 로 넣지 않는 이유는
+> 스크립트 주석에 적어 뒀다.)
 
 ## 메뉴바 항목
 
 | 항목 | 하는 일 |
 | --- | --- |
 | `고양이 N마리 · 작업 중 N` | 읽기 전용 요약 |
+| `⚠️ 세션 파일 …` | 세션 파일을 못 읽었을 때만 나오는 경고 ([아래](#문제가-생겼을-때)) |
 | `일시정지` / `재개` | 폴링·그리기 정지 |
 | `지금 새로고침` | 즉시 한 번 폴링 |
 | `디스플레이` | 고양이를 그릴 화면 선택 |
@@ -170,6 +210,34 @@ interactive 세션마다 고양이 한 마리를 배치한다. busy 세션의
 `SceneConfig.bottomInset`(40pt)을 더해 `Scene.layout` 에 넘긴다. Dock 이 좌·우에 있거나
 자동 숨김이면 두 `minY` 가 같아 40pt 그대로다. Dock 크기·위치·자동 숨김을 바꾸면 macOS 가
 `didChangeScreenParameters` 를 보내고, 거기서 `refitToScreen()` 이 여백을 다시 잰다.
+
+## 문제가 생겼을 때
+
+이 앱은 Claude Code 의 **문서화되지 않은 내부 파일 구조**에 직접 기댄다 —
+`~/.claude/sessions/*.json` 의 `pid`/`sessionId`/`kind`/`status`/`cwd`/`name`,
+`~/.claude/projects/<cwd>/<sessionId>/subagents/*.jsonl` 의 mtime, transcript 끝의
+`ai-title` 줄. 전부 공개 API 가 아니라서 Claude Code 업데이트로 조용히 깨질 수 있다.
+
+그래서 매 틱 세션 파일을 몇 개 봤고 몇 개를 받아들였는지, 못 받아들인 건 왜인지
+(`unreadable` / `malformed` / `nonInteractive` / `deadPid`) 세서, 문제가 있을 때만
+메뉴바 요약 아래에 한 줄이 더 붙는다.
+
+| 메뉴 줄 | 뜻 | 볼 곳 |
+| --- | --- | --- |
+| (없음) | 정상 | — |
+| `⚠️ 세션 파일 N개를 읽지 못함 — Claude Code 구조가 바뀌었을 수 있음` | 파일은 N개 있는데 **하나도** 못 받아들였고 그 이유가 읽기·파싱 실패다. `sessions/*.json` 스키마가 바뀌었을 가능성이 크다 | `ls ~/.claude/sessions` 로 파일이 있는지, 그 JSON 에 `sessionId`·`kind`·`pid` 가 그대로 있는지 |
+| `⚠️ 세션 파일 M개 읽기 실패` | 일부는 읽었는데 M개는 못 읽었다(권한·경합·깨진 파일) | 아래 로그 |
+
+`kind` 가 `interactive` 가 아닌 파일과 프로세스가 이미 죽은 세션 파일은 정상이라
+경고에 세지 않는다. 남은 파일이 **전부** 그 둘이라 고양이가 0마리여도 아무 줄도 안 뜬다 —
+그게 맞는 상황이고, 늘 떠 있는 경고는 아무도 안 읽는다. 읽기·파싱 실패가 하나라도
+섞여야 경고가 나온다.
+
+자세한 경로는 통합 로그에 남는다:
+
+```bash
+log stream --predicate 'subsystem == "claude-cats"' --level info
+```
 
 ## 직접 그린 SVG 넣는 법
 
