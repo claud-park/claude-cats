@@ -33,6 +33,8 @@ final class Updater {
         var commitDate: String
         var branch: String
         var version: String
+        /// `stable`(안정 self-signed 서명) 또는 `adhoc`. 파일 접근 거부 안내 문구를 가른다.
+        var signing: String
 
         /// 메뉴의 읽기 전용 버전 줄.
         var summary: String {
@@ -137,8 +139,9 @@ final class Updater {
         let repo = stamp.repoRoot
         let branch = stamp.branch
         let commit = stamp.commit
+        let signing = stamp.signing
         queue.async { [weak self] in
-            let status = Self.performCheck(repo: repo, branch: branch, commit: commit)
+            let status = Self.performCheck(repo: repo, branch: branch, commit: commit, signing: signing)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
@@ -155,7 +158,8 @@ final class Updater {
     private nonisolated static func performCheck(
         repo: String,
         branch: String,
-        commit: String
+        commit: String,
+        signing: String
     ) -> UpdateStatus {
         defer { trimLog() }
         appendLog("== 확인 \(timestamp()) — \(repo) (\(branch) @ \(commit))")
@@ -179,8 +183,7 @@ final class Updater {
                 || reach.output.lowercased().contains("operation not permitted")
             if deniedByFileAccess {
                 appendLog("저장소 로컬 접근이 막혔다(파일 접근 권한으로 본다)\n\(reach.output)")
-                return .offline("소스 저장소에 접근하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > "
-                    + "파일 및 폴더(또는 전체 디스크 접근)에서 ClaudeCats 를 허용한 뒤 다시 확인해 주세요.")
+                return .offline(UpdateCheck.fileAccessBlockedMessage(signing: signing))
             }
             appendLog("rev-parse 실패(\(reach.status))\n\(reach.output)")
             return .offline(reason(reach))
@@ -446,7 +449,8 @@ extension Updater.Stamp {
             commit: value("ClaudeCatsCommit"),
             commitDate: value("ClaudeCatsCommitDate"),
             branch: value("ClaudeCatsBranch"),
-            version: value("CFBundleShortVersionString")
+            version: value("CFBundleShortVersionString"),
+            signing: value("ClaudeCatsSigned")
         )
     }
 }

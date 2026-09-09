@@ -24,6 +24,31 @@ public enum UpdateCheck {
     /// `scripts/bundle.sh` 가 못 알아낸 값에 박아 두는 표시.
     public static let unknown = "unknown"
 
+    /// `scripts/bundle.sh` 가 Info.plist 의 `ClaudeCatsSigned` 에 박는 값.
+    /// `stable` = "ClaudeCats Self-Signed" ID 로 서명(지정 요구사항이 빌드마다 동일 →
+    /// 파일 접근 권한 유지), `adhoc` = ad-hoc 서명(빌드마다 해시가 바뀌어 권한이 풀림).
+    public static let signingStable = "stable"
+    public static let signingAdhoc = "adhoc"
+
+    /// 저장소 로컬 접근이 막혔을 때 보여줄 안내. ad-hoc 서명이면 왜 매번 풀리는지와
+    /// 해결책(안정 서명 ID 만들기 + 재빌드)을 덧붙인다.
+    ///
+    /// 순수 함수라 서명 상태별 문구를 네트워크 없이 테스트할 수 있다. `Updater` 가
+    /// 파일 접근 거부(timedOut / "operation not permitted")를 감지했을 때 이걸 부른다.
+    public static func fileAccessBlockedMessage(signing: String) -> String {
+        let base = "소스 저장소에 접근하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > "
+            + "파일 및 폴더(또는 전체 디스크 접근)에서 ClaudeCats 를 허용한 뒤 다시 확인해 주세요."
+        let normalized = signing.trimmingCharacters(in: .whitespacesAndNewlines)
+        // stable 만 예외다. adhoc·unknown·빈 값(옛 번들에는 스탬프가 없다)은 전부
+        // ad-hoc 으로 보고 재빌드 안내를 붙인다.
+        guard normalized == signingStable else {
+            return base + "\n\n이 앱은 ad-hoc 서명이라 다시 빌드할 때마다 이 권한이 풀립니다. "
+                + "scripts/make-signing-identity.sh 를 한 번 실행하고 앱을 다시 빌드(./scripts/install.sh)하면, "
+                + "한 번 허용한 파일 접근 권한이 이후 업데이트에도 유지됩니다."
+        }
+        return base
+    }
+
     /// 번들 스탬프만 보고 "업데이트를 시도해도 되는가"를 정한다. 안 되면 그 이유, 되면 nil.
     ///
     /// 여기서 걸러야 없는 저장소에 대고 `fetch` 하거나, 어느 브랜치를 따라갈지도 모르는 채

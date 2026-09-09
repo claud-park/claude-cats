@@ -35,6 +35,27 @@ else
 fi
 SHORT_VERSION="0.1.$BUILD"
 
+# 서명 방식을 미리 정한다 — Info.plist 에 그 결과(stable|adhoc)를 박아, 앱이
+# "지금 도는 번들이 ad-hoc 이라 업데이트마다 파일 접근 권한이 풀린다"를 알 수 있게 한다.
+#
+# "ClaudeCats Self-Signed" ID 가 (search list 의) 키체인에 있으면 그걸로 서명한다.
+# 그 ID 는 빌드마다 같은 인증서라 지정 요구사항(designated requirement)이 안정적이고,
+# 그래서 한 번 받은 TCC 파일 접근 권한이 self-update 재빌드 뒤에도 유지된다.
+# ID 가 없으면 예전처럼 ad-hoc 으로 물러선다(경고와 함께).
+SIGN_IDENTITY_NAME="ClaudeCats Self-Signed"
+# `-v`(valid only)를 쓰지 않는다 — self-signed 인증서는 신뢰 앵커가 아니라
+# CSSMERR_TP_NOT_TRUSTED 로 "invalid" 취급돼 `-v` 에서 빠진다. codesign 은 그 인증서로도
+# 잘 서명하고(로컬 서명엔 신뢰 불필요), TCC 가 보는 지정 요구사항도 안정적이다.
+# `|| true`: ID 가 없으면 grep 이 1 로 끝나는데, 이 스크립트의 pipefail+set -e 에서
+# 그게 여기서 빌드를 죽인다(ID 없는 지금 머신이 그렇다). 빈 결과를 정상으로 받는다.
+SIGN_SHA="$(security find-identity -p codesigning 2>/dev/null \
+  | grep -F "\"$SIGN_IDENTITY_NAME\"" | head -1 | awk '{print $2}' || true)"
+if [ -n "$SIGN_SHA" ]; then
+  SIGNED_STAMP="stable"
+else
+  SIGNED_STAMP="adhoc"
+fi
+
 swift build -c release 2>&1 | tail -1
 BIN=".build/release/ClaudeCats"
 APP="dist/ClaudeCats.app"
@@ -76,6 +97,7 @@ $ICON_KEY
   <key>ClaudeCatsCommit</key><string>$COMMIT</string>
   <key>ClaudeCatsCommitDate</key><string>$COMMIT_DATE</string>
   <key>ClaudeCatsBranch</key><string>$BRANCH</string>
+  <key>ClaudeCatsSigned</key><string>$SIGNED_STAMP</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -83,5 +105,15 @@ $ICON_KEY
 </plist>
 PLIST
 
-codesign --force --sign - "$APP" >/dev/null
-echo "built $APP ($SHORT_VERSION · $COMMIT · $COMMIT_DATE · $BRANCH)"
+if [ "$SIGNED_STAMP" = "stable" ]; then
+  # --identifier 를 못 박는다. CFBundleIdentifier 와 같지만 명시해 둬야 지정 요구사항이
+  # `identifier "com.claudecats.app" and certificate leaf = H"…"` 로 안정적으로 나온다.
+  codesign --force --sign "$SIGN_SHA" --identifier com.claudecats.app "$APP" >/dev/null
+  echo "서명: $SIGN_IDENTITY_NAME ($SIGN_SHA)"
+else
+  codesign --force --sign - "$APP" >/dev/null
+  echo "경고: '$SIGN_IDENTITY_NAME' 서명 ID가 없어 ad-hoc 으로 서명했습니다." >&2
+  echo "      업데이트할 때마다 파일 접근 권한(TCC)을 다시 부여해야 합니다." >&2
+  echo "      scripts/make-signing-identity.sh 를 한 번 실행하면 그 권한이 유지됩니다." >&2
+fi
+echo "built $APP ($SHORT_VERSION · $COMMIT · $COMMIT_DATE · $BRANCH · $SIGNED_STAMP)"
