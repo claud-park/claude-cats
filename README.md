@@ -141,6 +141,14 @@ interactive 세션마다 고양이 한 마리를 배치한다. busy 세션의
 옮겨다닌다. 디스플레이 구성이 바뀌면(`didChangeScreenParameters`) 창을 다시 맞추고 배치를
 새 화면 크기로 다시 계산한다.
 
+창은 `visibleFrame`(메뉴바·Dock 을 뺀 영역)이 아니라 `frame`(화면 전체)을 덮는다 — 바탕화면
+레이어라 좌표계가 흔들리지 않는 편이 낫고, Dock 이 숨었다 나타날 때마다 창을 다시 잡지 않아도
+된다. 대신 **배치**를 Dock 위로 올린다: `LayoutInsets.bottomInset(frame:visibleFrame:base:)`
+이 `visibleFrame.minY − frame.minY`(하단 Dock 이 먹은 높이, 없으면 0)에 기본 여백
+`SceneConfig.bottomInset`(40pt)을 더해 `Scene.layout` 에 넘긴다. Dock 이 좌·우에 있거나
+자동 숨김이면 두 `minY` 가 같아 40pt 그대로다. Dock 크기·위치·자동 숨김을 바꾸면 macOS 가
+`didChangeScreenParameters` 를 보내고, 거기서 `refitToScreen()` 이 여백을 다시 잰다.
+
 ## 직접 그린 SVG 넣는 법
 
 파이프라인은 두 단계다.

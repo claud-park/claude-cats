@@ -121,7 +121,15 @@ final class AppController {
     private func render(_ snapshot: Snapshot) {
         lastSnapshot = snapshot
         lastAnimationsEnabled = mode.animationsEnabled
-        let layout = Scene.layout(snapshot, screenSize: window.screenSize, animationsEnabled: mode.animationsEnabled)
+        // 창은 화면 전체를 덮지만 배치는 Dock 위에서 시작한다.
+        var config = SceneConfig()
+        config.bottomInset = window.sceneBottomInset
+        let layout = Scene.layout(
+            snapshot,
+            screenSize: window.screenSize,
+            animationsEnabled: mode.animationsEnabled,
+            config: config
+        )
         window.apply(layout)
         onSnapshot?(snapshot)
     }

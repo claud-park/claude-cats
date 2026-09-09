@@ -26,6 +26,10 @@ final class DesktopWindow {
     /// 사용자가 메뉴에서 고른 디스플레이 이름. nil 이면 메인 디스플레이(자동).
     private var preferredDisplayName: String?
 
+    /// 고양이를 화면 바닥에서 얼마나 띄울지. 창은 `frame` 전체를 덮지만 배치는
+    /// `visibleFrame` 위에 올려 하단 Dock 에 묻히지 않게 한다. `refitToScreen` 에서 다시 잰다.
+    private(set) var sceneBottomInset: CGFloat = SceneConfig().bottomInset
+
     /// 선택한 이름의 디스플레이. 이름이 안 맞거나(뽑아버린 모니터) 없으면 메인으로 폴백한다.
     /// 저장 프로퍼티가 다 차기 전(init)에도 불러야 해서 static 이다.
     private static func targetScreen(preferredDisplayName: String?) -> NSScreen? {
@@ -43,11 +47,22 @@ final class DesktopWindow {
         Self.targetScreen(preferredDisplayName: preferredDisplayName)
     }
 
+    /// 화면 하나의 Dock 여백. 화면이 없으면(디스플레이가 다 빠짐) 기본 여백만 쓴다.
+    private static func bottomInset(for screen: NSScreen?) -> CGFloat {
+        guard let screen else { return SceneConfig().bottomInset }
+        return LayoutInsets.bottomInset(
+            frame: screen.frame,
+            visibleFrame: screen.visibleFrame,
+            base: SceneConfig().bottomInset
+        )
+    }
+
     init(preferredDisplayName: String? = nil) {
         self.preferredDisplayName = preferredDisplayName
         let screen = Self.targetScreen(preferredDisplayName: preferredDisplayName)
         let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let scale = screen?.backingScaleFactor ?? 2
+        sceneBottomInset = Self.bottomInset(for: screen)
 
         window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isOpaque = false
@@ -87,6 +102,8 @@ final class DesktopWindow {
         // 콘텐츠 뷰는 창 좌표계의 원점에 그대로 둔다 — Scene·말풍선 계산은 영향받지 않는다.
         window.setFrame(screen.frame, display: true)
         contentView.frame = NSRect(origin: .zero, size: screen.frame.size)
+        // Dock 크기·자동 숨김·위치가 바뀌면 didChangeScreenParameters 가 여기로 온다.
+        sceneBottomInset = Self.bottomInset(for: screen)
         let scale = screen.backingScaleFactor
         rootLayer.contentsScale = scale
         // 이미 만들어진 고양이들은 생성 시점 스케일을 들고 있으므로 같이 내려준다.
