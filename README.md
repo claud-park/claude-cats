@@ -247,11 +247,63 @@ log stream --predicate 'subsystem == "claude-cats"' --level info
 Design/cats/source/<포즈>-figma.svg   ← Figma 에서 내보낸 원본(사람이 관리하는 유일한 그림)
   └ scripts/import-cat-svg.py         ← 껍데기 벗기기 · 64 상자 맞추기 · 털색 치환
 Design/cats/<포즈>.svg                ← 생성물. 손으로 고치지 말 것
-  └ scripts/svg2swift.py              ← CGPath 빌더로 변환
-Sources/ClaudeCats/CatArt.generated.swift   ← 생성물. 커밋은 한다
+  └ scripts/svg2swift.py              ← 경로 데이터로 변환
+Sources/ClaudeCats/CatArt.generated.swift           ← 생성물. 커밋은 한다
+Sources/ClaudeCats/CatArt.sitting.generated.swift   ← 생성물. 커밋은 한다
+Sources/ClaudeCats/CatArt.sleeping.generated.swift  ← 생성물. 커밋은 한다
+Sources/ClaudeCats/CatArt.alert.generated.swift     ← 생성물. 커밋은 한다
 ```
 
 런타임에 SVG 를 파싱하지 않으므로 그림을 바꾸면 스크립트를 다시 돌려야 한다.
+
+### 생성 파일
+
+| 파일 | 내용 |
+| --- | --- |
+| `CatArt.generated.swift` | `CatArtColor` · `CatArtLayer` · `enum CatArt` 껍데기. 좌표는 한 개도 없다. `alert.svg` 가 없을 때 쓰는 별칭도 여기 있다 |
+| `CatArt.<포즈>.generated.swift` | 그 포즈의 `CatArt.<포즈>Top` · `<포즈>TailAboveBody` · `<포즈>Body/TailA/TailB` 와 경로 데이터 |
+
+**경로는 코드가 아니라 데이터로 싣는다.** 예전에는 `p.addCurve(to:control1:control2:)`
+문장을 도형마다 수천 개 펼쳤는데, 타입체커가 그 호출식을 전부 씹느라
+`swift build` 가 **208초**나 걸렸다([issue #4]). 지금은 경로 하나를
+`[명령코드, 좌표...]` 가 이어 붙은 평평한 `[Float]` 리터럴 하나로 내보내고,
+런타임이 `ClaudeCatsCore.PathData.build` 로 처음 쓸 때 한 번 `CGPath` 로 편다.
+
+| 명령코드 | 명령 | 뒤따르는 좌표 |
+| --- | --- | --- |
+| 0 | move | x, y |
+| 1 | line | x, y |
+| 2 | cubic | c1x, c1y, c2x, c2y, x, y |
+| 3 | close | (없음) |
+
+issue #4 는 세 방향을 적어 뒀다 — ① 좌표 정밀도를 1자리로 줄이기 ② 경로를
+데이터로 내보내기 ③ 포즈별로 파일 쪼개기. **②와 ③을 같이 골랐다.**
+①은 64pt 상자에서 눈에 보이는 손실이라 뺐다(2자리는 2x 화면의 0.02px 이고,
+1자리면 0.2px 라 곡선이 각진다). 결과는 아래와 같다.
+
+| | 전 | 후 |
+| --- | --- | --- |
+| 콜드 `swift build` (debug) | 207.9초 | 19.2초 |
+| 증분(debug): `CatArt.sitting.generated.swift` 만 고쳤을 때 | 207.0초 | 1.8초 |
+| 생성물 크기 합계 | 1,480,679 B (1 파일) | 522,328 B (4 파일) |
+| 런타임 비용 | 0 | 세 포즈 전부 디코드해도 0.18 ms(한 번) |
+
+②만으로도 컴파일 부담은 사라지지만, ③이 있어야 포즈 하나를 고쳤을 때 나머지
+두 포즈가 다시 컴파일되지 않는다. 좌표는 그대로 소수 2자리이고, 한 줄에 명령
+하나씩 찍어서 그림을 고쳤을 때 diff 가 명령 단위로 남는다.
+
+증분 이득은 **debug 에만** 해당한다 — `swift build -c release` 는 모듈 전체를 한
+번에 최적화(WMO)하므로 어느 파일을 고치든 `ClaudeCats` 모듈이 통째로 다시
+컴파일된다. 포즈별 분리가 release 증분 빌드를 빠르게 해 주지는 않는다 — 어느
+파일을 고쳐도 5.5초로 같다. release 가 빨라진 건 순전히 ②데이터화 덕이다
+(콜드 14.5초).
+
+메모리는 좌표 74,758개 × 4바이트 ≈ **292KB** 다. 포즈를 처음 쓸 때 그 포즈 것만
+올라오고, `CGPath` 로 편 뒤에도 원본 `[Float]` 은 전역이라 그대로 남는다.
+64pt 상자에 세 포즈뿐이라 지금은 문제가 아니지만, 포즈가 훨씬 늘면 그때는
+디코드 후 배열을 놓아주는 구조를 생각해야 한다.
+
+[issue #4]: https://github.com/claud-park/claude-cats/issues/4
 
 ### 권장 흐름 (Figma)
 

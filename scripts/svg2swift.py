@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-"""Design/cats/*.svg → Sources/ClaudeCats/CatArt.generated.swift 변환기.
+"""Design/cats/*.svg → Sources/ClaudeCats/CatArt*.generated.swift 변환기.
 
 표준 라이브러리만 쓴다. 사용법:
 
-    python3 scripts/svg2swift.py Design/cats/sitting.svg Design/cats/sleeping.svg > out.swift
+    python3 scripts/svg2swift.py --out-dir Sources/ClaudeCats Design/cats/*.svg
+
+`--out-dir` 없이 부르면 전체를 stdout 으로 이어 찍는다(눈으로 볼 때만 쓴다).
+
+내보내는 파일은 포즈마다 하나씩 + 공용 타입 하나다.
+
+    CatArt.generated.swift            타입(CatArtColor·CatArtLayer·enum CatArt)과 별칭
+    CatArt.<포즈>.generated.swift     그 포즈의 상수·레이어·경로 데이터
+
+경로는 **코드가 아니라 데이터**로 나간다. `p.addCurve(...)` 문장 수천 개 대신
+`[명령코드, 좌표...]` 평평한 `[Float]` 리터럴을 싣고, 런타임이
+`ClaudeCatsCore.PathData.build` 로 한 번 펴서 CGPath 를 만든다(issue #4).
 
 입력 규약은 README 의 "직접 그린 SVG 넣는 법" 절 참고. 요약:
   - viewBox 필수. 그림은 64×64 박스에 균일 스케일로 맞춘다.
@@ -856,34 +867,92 @@ def swift_color(paint):
     return ".fixed(r: %s, g: %s, b: %s, a: %s)" % tuple(num(v) for v in paint[1:])
 
 
-def swift_path(cmds, indent):
-    pad = " " * indent
-    lines = ["%slet p = CGMutablePath()" % pad]
+# ---------------------------------------------------------------- 경로 인코딩
+#
+# 경로를 Swift **문장**으로 펼치면 타입체커가 호출식 수천 개를 씹어야 해서 빌드가
+# 100초씩 걸린다(issue #4). 대신 `[명령코드, 좌표...]` 를 이어 붙인 평평한 숫자
+# 배열 하나로 내보내고, 런타임의 `PathData.build` 가 한 번에 CGPath 로 편다.
+
+OP_MOVE, OP_LINE, OP_CUBIC, OP_CLOSE = 0, 1, 2, 3
+
+# 명령코드 → 뒤따르는 좌표 개수. Swift 쪽 PathData 와 이 표가 정본이다.
+OP_ARITY = {OP_MOVE: 2, OP_LINE: 2, OP_CUBIC: 6, OP_CLOSE: 0}
+
+
+def encode_path(cmds):
+    """명령 리스트 → [명령코드, 좌표...] 평평한 숫자 배열.
+
+    3차 베지어는 명령 리스트 그대로 제어점1·제어점2·끝점 순서로 싣는다.
+    """
+    out = []
     for cmd in cmds:
         head = cmd[0]
         if head == "M":
-            lines.append("%sp.move(to: CGPoint(x: %s, y: %s))" % (pad, num(cmd[1]), num(cmd[2])))
+            out.extend((OP_MOVE, cmd[1], cmd[2]))
         elif head == "L":
-            lines.append("%sp.addLine(to: CGPoint(x: %s, y: %s))" % (pad, num(cmd[1]), num(cmd[2])))
+            out.extend((OP_LINE, cmd[1], cmd[2]))
         elif head == "C":
-            lines.append(
-                "%sp.addCurve(to: CGPoint(x: %s, y: %s), control1: CGPoint(x: %s, y: %s), "
-                "control2: CGPoint(x: %s, y: %s))"
-                % (pad, num(cmd[5]), num(cmd[6]), num(cmd[1]), num(cmd[2]), num(cmd[3]), num(cmd[4]))
-            )
+            out.extend((OP_CUBIC, cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6]))
         elif head == "Z":
-            lines.append("%sp.closeSubpath()" % pad)
-    lines.append("%sreturn p" % pad)
+            out.append(OP_CLOSE)
+        else:
+            # 조용히 흘리면 그림에서 획이 하나 사라진 채로 커밋된다. 이름을 찍고 중단한다.
+            fail("인코딩할 수 없는 명령: %r" % (head,))
+    return out
+
+
+def decode_path(values):
+    """encode_path 의 역. Swift `PathData.build` 와 같은 규칙으로 읽는다 — 배열이
+    잘렸거나, 모르는 명령코드가 나오거나, 시작점(move) 없이 line·cubic·close 가
+    먼저 나오면 그 자리에서 조용히 멈춘다."""
+    out = []
+    i = 0
+    n = len(values)
+    started = False           # Swift 쪽 `!path.isEmpty` 와 같은 뜻
+    while i < n:
+        op = values[i]
+        if op == OP_MOVE and i + 2 < n:
+            out.append(("M", values[i + 1], values[i + 2]))
+            started = True
+        elif op == OP_LINE and i + 2 < n and started:
+            out.append(("L", values[i + 1], values[i + 2]))
+        elif op == OP_CUBIC and i + 6 < n and started:
+            out.append(("C", *values[i + 1:i + 7]))
+        elif op == OP_CLOSE and started:
+            out.append(("Z",))
+        else:
+            break
+        i += 1 + OP_ARITY[op]
+    return out
+
+
+def swift_data(name, values):
+    """평평한 숫자 배열 → `private let <name>: [Float] = [...]`.
+
+    한 줄에 명령 하나씩 찍는다 — 그림을 고쳤을 때 diff 가 명령 단위로 남는다.
+    """
+    lines = ["private let %s: [Float] = [" % name]
+    i = 0
+    n = len(values)
+    while i < n:
+        op = int(values[i])
+        arity = OP_ARITY[op]
+        row = [str(op)] + [num(v) for v in values[i + 1:i + 1 + arity]]
+        lines.append("    " + ", ".join(row) + ",")
+        i += 1 + arity
+    lines.append("]")
     return "\n".join(lines)
 
 
 def swift_layers(name, layers):
+    """(`static let <name>: [CatArtLayer]` 소스, 그 경로 데이터 배열 소스들)."""
     out = ["    static let %s: [CatArtLayer] = [" % name]
-    for layer in layers:
+    data = []
+    for index, layer in enumerate(layers):
+        data_name = "%s%d" % (name, index)
+        data.append(swift_data(data_name, encode_path(layer.cmds)))
         out.append("        CatArtLayer(")
-        out.append("            path: {")
-        out.append(swift_path(layer.cmds, 16))
-        out.append("            }(),")
+        out.append("            path: PathData.build(%s)," % data_name)
         out.append("            fill: %s," % swift_color(layer.fill))
         out.append("            stroke: %s," % swift_color(layer.stroke))
         out.append("            lineWidth: %s," % num(layer.line_width))
@@ -893,11 +962,15 @@ def swift_layers(name, layers):
         out.append("            opacity: %s" % num(layer.opacity))
         out.append("        ),")
     out.append("    ]")
-    return "\n".join(out)
+    return "\n".join(out), data
 
 
-HEADER = """// GENERATED — edit Design/cats/*.svg and run scripts/generate-cat-art.sh
-// 좌표는 64×64 박스, AppKit 방향(y 위로)으로 이미 뒤집혀 있다.
+SHARED_FILE = "CatArt.generated.swift"
+POSE_FILE = "CatArt.%s.generated.swift"
+
+SHARED_HEADER = """// GENERATED — edit Design/cats/*.svg and run scripts/generate-cat-art.sh
+// 여기에는 타입과 별칭만 있다. 포즈별 도형은 CatArt.<포즈>.generated.swift 로 나뉜다
+// (그림 한 포즈만 고쳐도 그 파일만 다시 컴파일되게 — issue #4).
 import CoreGraphics
 import QuartzCore
 
@@ -922,6 +995,16 @@ struct CatArtLayer: @unchecked Sendable {
 }
 
 enum CatArt {"""
+
+POSE_HEADER = """// GENERATED — edit Design/cats/%s.svg and run scripts/generate-cat-art.sh
+// 좌표는 64×64 박스, AppKit 방향(y 위로)으로 이미 뒤집혀 있다.
+// 경로는 코드가 아니라 데이터다 — 파일 끝의 [명령코드, 좌표...] 배열을
+// PathData.build 가 처음 쓸 때 한 번 CGPath 로 편다.
+import ClaudeCatsCore
+import CoreGraphics
+import QuartzCore
+
+extension CatArt {"""
 
 
 def camel(text):
@@ -956,42 +1039,98 @@ def fallback_aliases(stems, section_names, scalar_names):
 
 
 def convert_files(paths):
-    sections = []
-    scalars = []
+    """[SVG 경로] → {생성 파일 이름: Swift 소스}. 포즈마다 한 파일 + 공용 타입 한 파일."""
+    files = {}
     stems = []
-    scalar_names = []
+    section_names = set()
+    scalar_names = set()
     for path in paths:
         with open(path, encoding="utf-8") as handle:
             groups, tail_above = parse_svg(handle.read(), want_order=True)
         stem = camel(os.path.splitext(os.path.basename(path))[0])
         stems.append(stem)
+
+        sections, data = [], []
         for bucket in ("body", "tailA", "tailB"):
             if bucket in groups:
-                suffix = bucket[0].upper() + bucket[1:]
-                sections.append((stem + suffix, groups[bucket]))
+                name = stem + bucket[0].upper() + bucket[1:]
+                section_names.add(name)
+                text, arrays = swift_layers(name, groups[bucket])
+                sections.append(text)
+                data.extend(arrays)
+        if not sections:
+            fail("%s 에 변환할 도형이 없다" % path)
+
         box = layers_bounds([layer for layers in groups.values() for layer in layers])
-        scalar_names.append(stem + "Top")
-        scalars.append(
+        scalar_names.add(stem + "Top")
+        scalars = [
             "    /// 말풍선을 얹을 그림 꼭대기(AppKit y). 선 두께는 빼고 경로 bbox 만 본다.\n"
             "    static let %sTop: CGFloat = %s" % (stem, num(box[3] if box else BOX))
-        )
+        ]
         if "tailA" in groups:
-            scalar_names.append(stem + "TailAboveBody")
+            scalar_names.add(stem + "TailAboveBody")
             scalars.append(
                 "    /// 원본 SVG 에서 꼬리가 몸통 뒤에 오면 false — 런타임이 그릇 레이어 순서를 맞춘다.\n"
                 "    static let %sTailAboveBody: Bool = %s" % (stem, "true" if tail_above else "false")
             )
-    if not sections:
+
+        files[POSE_FILE % stem] = (
+            (POSE_HEADER % stem) + "\n"
+            + "\n\n".join(scalars + sections) + "\n}\n\n"
+            + "\n\n".join(data) + "\n"
+        )
+
+    if not files:
         fail("변환할 도형이 없다")
-    scalars += fallback_aliases(set(stems), {name for name, _ in sections}, set(scalar_names))
-    body = "\n\n".join(swift_layers(name, layers) for name, layers in sections)
-    return HEADER + "\n" + "\n\n".join(scalars) + "\n\n" + body + "\n}\n"
+    aliases = fallback_aliases(set(stems), section_names, scalar_names)
+    files[SHARED_FILE] = SHARED_HEADER + "\n" + "".join(text + "\n" for text in aliases) + "}\n"
+    return files
+
+
+def write_files(out_dir, files):
+    """생성 파일을 쓰고, 더는 안 쓰는 예전 생성 파일을 지운다. (쓴 것, 지운 것)."""
+    for name in sorted(files):
+        with open(os.path.join(out_dir, name), "w", encoding="utf-8") as handle:
+            handle.write(files[name])
+    removed = []
+    for name in sorted(os.listdir(out_dir)):
+        if name in files or name == SHARED_FILE:
+            continue
+        # 포즈가 없어지면 그 포즈 파일이 남아 컴파일을 깨뜨린다. 여기서만 지운다.
+        if name.startswith("CatArt.") and name.endswith(".generated.swift"):
+            os.remove(os.path.join(out_dir, name))
+            removed.append(name)
+    return sorted(files), removed
+
+
+USAGE = "사용법: svg2swift.py [--out-dir <디렉터리>] <입력.svg> [입력2.svg ...]"
 
 
 def main(argv):
-    if len(argv) < 2:
-        fail("사용법: svg2swift.py <입력.svg> [입력2.svg ...]")
-    sys.stdout.write(convert_files(argv[1:]))
+    args = list(argv[1:])
+    out_dir = None
+    if "--out-dir" in args:
+        index = args.index("--out-dir")
+        if index + 1 >= len(args):
+            fail("--out-dir 뒤에 디렉터리가 필요하다. " + USAGE)
+        out_dir = args[index + 1]
+        del args[index:index + 2]
+    if not args:
+        fail(USAGE)
+
+    files = convert_files(args)
+    if out_dir is None:
+        # 디렉터리를 안 주면 전부 이어서 stdout 에 찍는다(눈으로 볼 때만 쓴다).
+        sys.stdout.write("\n".join(files[name] for name in sorted(files)))
+        return 0
+    if not os.path.isdir(out_dir):
+        fail("출력 디렉터리가 없다: %s" % out_dir)
+    written, removed = write_files(out_dir, files)
+    for name in written:
+        lines = files[name].count("\n")
+        sys.stderr.write("생성: %s (%d 줄)\n" % (os.path.join(out_dir, name), lines))
+    for name in removed:
+        sys.stderr.write("삭제: %s (더는 쓰지 않는 생성물)\n" % os.path.join(out_dir, name))
     return 0
 
 

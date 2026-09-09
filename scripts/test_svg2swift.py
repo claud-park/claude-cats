@@ -165,7 +165,7 @@ class FillRuleTests(unittest.TestCase):
     def test_swift_emits_fill_rule(self):
         svg = wrap('<path d="M0 0 L1 1" fill="#FUR" fill-rule="evenodd"/>')
         layers = S.parse_svg(svg)["body"]
-        self.assertIn("fillRule: .evenOdd", S.swift_layers("x", layers))
+        self.assertIn("fillRule: .evenOdd", S.swift_layers("x", layers)[0])
 
     def test_unknown_fill_rule_aborts(self):
         svg = wrap('<path d="M0 0 L1 1" fill="#FUR" fill-rule="wat"/>')
@@ -183,7 +183,7 @@ class LineJoinTests(unittest.TestCase):
         svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-linejoin="bevel"/>')
         layers = S.parse_svg(svg)["body"]
         self.assertEqual(layers[0].line_join, "bevel")
-        self.assertIn("lineJoin: .bevel", S.swift_layers("x", layers))
+        self.assertIn("lineJoin: .bevel", S.swift_layers("x", layers)[0])
 
     def test_different_line_joins_do_not_merge(self):
         svg = wrap('<path d="M0 0 L4 0" stroke="#FUR" stroke-linejoin="miter"/>'
@@ -204,7 +204,7 @@ class FurLightTests(unittest.TestCase):
 
     def test_swift_case(self):
         svg = wrap('<path d="M0 0 L1 1" fill="#FURLIGHT"/>')
-        self.assertIn("fill: .furLight", S.swift_layers("x", S.parse_svg(svg)["body"]))
+        self.assertIn("fill: .furLight", S.swift_layers("x", S.parse_svg(svg)["body"])[0])
 
     def test_does_not_merge_with_fur(self):
         svg = wrap('<path d="M0 0 L1 1" fill="#FUR"/><path d="M2 2 L3 3" fill="#FURLIGHT"/>')
@@ -303,6 +303,100 @@ class FailureTests(unittest.TestCase):
         self.assertIn("linearGradient", str(ctx.exception))
 
 
+class EncodeTests(unittest.TestCase):
+    """경로 인코딩([명령코드, 좌표...]). Swift 쪽 짝은 ClaudeCatsCore.PathData 다."""
+
+    SQUARE = [
+        ("M", 0.0, 0.0), ("L", 10.0, 0.0), ("L", 10.0, 10.0),
+        ("C", 8.0, 12.0, 2.0, 12.0, 0.0, 10.0), ("Z",),
+    ]
+
+    def test_opcodes_and_arities(self):
+        self.assertEqual((S.OP_MOVE, S.OP_LINE, S.OP_CUBIC, S.OP_CLOSE), (0, 1, 2, 3))
+        self.assertEqual(S.OP_ARITY, {0: 2, 1: 2, 2: 6, 3: 0})
+
+    def test_known_command_list_encodes_flat(self):
+        self.assertEqual(S.encode_path(self.SQUARE), [
+            0, 0.0, 0.0,
+            1, 10.0, 0.0,
+            1, 10.0, 10.0,
+            2, 8.0, 12.0, 2.0, 12.0, 0.0, 10.0,
+            3,
+        ])
+
+    def test_round_trip(self):
+        self.assertEqual(S.decode_path(S.encode_path(self.SQUARE)), self.SQUARE)
+
+    def test_length_is_one_per_command_plus_its_coordinates(self):
+        values = S.encode_path(self.SQUARE)
+        self.assertEqual(len(values), sum(1 + S.OP_ARITY[
+            {"M": S.OP_MOVE, "L": S.OP_LINE, "C": S.OP_CUBIC, "Z": S.OP_CLOSE}[c[0]]
+        ] for c in self.SQUARE))
+
+    def test_cubic_keeps_control_points_before_the_end_point(self):
+        values = S.encode_path([("C", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)])
+        self.assertEqual(values, [2, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+    def test_truncated_array_decodes_up_to_the_last_whole_command(self):
+        values = S.encode_path(self.SQUARE)
+        self.assertEqual(S.decode_path(values[:-3]), self.SQUARE[:3])
+        self.assertEqual(S.decode_path(values[:2]), [])
+        self.assertEqual(S.decode_path([]), [])
+
+    def test_unknown_opcode_stops(self):
+        self.assertEqual(S.decode_path([0, 1.0, 2.0, 9, 1.0, 2.0]), [("M", 1.0, 2.0)])
+
+    def test_unknown_command_head_aborts(self):
+        """조용히 흘리면 획 하나가 사라진 채로 커밋된다 — 이름을 찍고 중단해야 한다."""
+        with self.assertRaises(SystemExit) as ctx:
+            S.encode_path([("M", 0.0, 0.0), ("A", 1.0, 2.0)])
+        self.assertIn("인코딩할 수 없는 명령", str(ctx.exception))
+        self.assertIn("A", str(ctx.exception))
+
+    def test_commands_before_any_move_stop(self):
+        """Swift PathData.build 의 `!path.isEmpty` 가드와 같은 규칙이어야 한다."""
+        self.assertEqual(S.decode_path([S.OP_LINE, 5.0, 5.0]), [])
+        self.assertEqual(S.decode_path([S.OP_CUBIC, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]), [])
+        self.assertEqual(S.decode_path([S.OP_CLOSE]), [])
+        # move 가 한 번 나온 뒤에는 close 도 정상이다.
+        self.assertEqual(S.decode_path([0, 1.0, 2.0, 3]), [("M", 1.0, 2.0), ("Z",)])
+
+    def test_swift_data_puts_one_command_per_line(self):
+        text = S.swift_data("x0", S.encode_path(self.SQUARE))
+        self.assertEqual(text.splitlines(), [
+            "private let x0: [Float] = [",
+            "    0, 0, 0,",
+            "    1, 10, 0,",
+            "    1, 10, 10,",
+            "    2, 8, 12, 2, 12, 0, 10,",
+            "    3,",
+            "]",
+        ])
+
+    def test_swift_data_keeps_two_decimals(self):
+        text = S.swift_data("x0", S.encode_path([("M", 1.234, 5.678)]))
+        self.assertIn("    0, 1.23, 5.68,", text)
+
+
+class WriteFilesTests(unittest.TestCase):
+    def test_stale_pose_file_is_removed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as out_dir:
+            stale = os.path.join(out_dir, "CatArt.crouching.generated.swift")
+            keep = os.path.join(out_dir, "CatLayer.swift")
+            for path in (stale, keep):
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("// x\n")
+            written, removed = S.write_files(out_dir, {
+                "CatArt.generated.swift": "// a\n",
+                "CatArt.sitting.generated.swift": "// b\n",
+            })
+            self.assertEqual(written, ["CatArt.generated.swift", "CatArt.sitting.generated.swift"])
+            self.assertEqual(removed, ["CatArt.crouching.generated.swift"])
+            self.assertFalse(os.path.exists(stale))
+            self.assertTrue(os.path.exists(keep))   # 생성물이 아닌 파일은 건드리지 않는다
+
+
 class RealArtTests(unittest.TestCase):
     def setUp(self):
         self.sitting = os.path.join(REPO, "Design", "cats", "sitting.svg")
@@ -318,15 +412,20 @@ class RealArtTests(unittest.TestCase):
         self.assertIn("tailB", groups)
         self.assertTrue(all(groups[k] for k in ("body", "tailA", "tailB")))
 
+    def joined(self, paths):
+        """생성 파일 전부를 한 덩어리로 — "어딘가에는 있어야 한다" 류 검사용."""
+        files = S.convert_files(list(paths))
+        return "\n".join(files[name] for name in sorted(files))
+
     def test_generated_swift_has_all_constants(self):
-        swift = S.convert_files(list(self.all_poses))
+        swift = self.joined(self.all_poses)
         for name in ("sittingBody", "sittingTailA", "sittingTailB", "sleepingBody",
                      "alertBody", "alertTailA", "alertTailB"):
             self.assertIn("static let %s: [CatArtLayer]" % name, swift)
         self.assertIn("GENERATED", swift)
 
     def test_generated_swift_has_scalars(self):
-        swift = S.convert_files(list(self.all_poses))
+        swift = self.joined(self.all_poses)
         self.assertIn("static let sittingTailAboveBody: Bool", swift)
         self.assertIn("static let sittingTop: CGFloat", swift)
         self.assertIn("static let sleepingTop: CGFloat", swift)
@@ -342,17 +441,87 @@ class RealArtTests(unittest.TestCase):
 
     def test_missing_alert_svg_falls_back_to_sitting(self):
         """alert.svg 를 아직 안 그렸어도 런타임이 참조하는 alert* 상수는 나와야 한다."""
-        swift = S.convert_files([self.sitting, self.sleeping])
-        self.assertIn("static let alertBody: [CatArtLayer] = sittingBody", swift)
-        self.assertIn("static let alertTailA: [CatArtLayer] = sittingTailA", swift)
-        self.assertIn("static let alertTailB: [CatArtLayer] = sittingTailB", swift)
-        self.assertIn("static let alertTop: CGFloat = sittingTop", swift)
-        self.assertIn("static let alertTailAboveBody: Bool = sittingTailAboveBody", swift)
+        files = S.convert_files([self.sitting, self.sleeping])
+        self.assertNotIn("CatArt.alert.generated.swift", files)
+        shared = files["CatArt.generated.swift"]
+        self.assertIn("static let alertBody: [CatArtLayer] = sittingBody", shared)
+        self.assertIn("static let alertTailA: [CatArtLayer] = sittingTailA", shared)
+        self.assertIn("static let alertTailB: [CatArtLayer] = sittingTailB", shared)
+        self.assertIn("static let alertTop: CGFloat = sittingTop", shared)
+        self.assertIn("static let alertTailAboveBody: Bool = sittingTailAboveBody", shared)
 
     def test_real_alert_svg_beats_the_fallback(self):
-        swift = S.convert_files(list(self.all_poses))
+        swift = self.joined(self.all_poses)
         self.assertNotIn("= sittingBody", swift)
         self.assertNotIn("= sittingTop", swift)
+
+    def test_one_file_per_pose_plus_a_shared_one(self):
+        files = S.convert_files(list(self.all_poses))
+        self.assertEqual(sorted(files), [
+            "CatArt.alert.generated.swift",
+            "CatArt.generated.swift",
+            "CatArt.sitting.generated.swift",
+            "CatArt.sleeping.generated.swift",
+        ])
+
+    def test_pose_file_holds_only_its_own_pose(self):
+        """포즈 하나만 고쳤을 때 그 파일만 다시 컴파일되려면 서로 안 섞여야 한다."""
+        files = S.convert_files(list(self.all_poses))
+        sitting = files["CatArt.sitting.generated.swift"]
+        self.assertIn("static let sittingBody: [CatArtLayer]", sitting)
+        self.assertIn("static let sittingTop: CGFloat", sitting)
+        for other in ("sleeping", "alert"):
+            self.assertNotIn(other, sitting)
+
+    def test_shared_file_has_the_types_and_no_coordinates(self):
+        shared = S.convert_files(list(self.all_poses))["CatArt.generated.swift"]
+        self.assertIn("struct CatArtLayer", shared)
+        self.assertIn("enum CatArtColor", shared)
+        self.assertNotIn("[Float]", shared)
+        self.assertNotIn("PathData.build", shared)
+
+    def test_paths_are_data_not_statements(self):
+        """경로는 CGMutablePath 문장이 아니라 [Float] 리터럴로 나가야 한다(issue #4)."""
+        swift = self.joined(self.all_poses)
+        self.assertNotIn("CGMutablePath", swift)
+        self.assertNotIn("addCurve", swift)
+        self.assertIn("private let sittingBody0: [Float] = [", swift)
+        self.assertIn("path: PathData.build(sittingBody0),", swift)
+
+    def test_every_layer_gets_its_own_data_array(self):
+        import re
+        sitting = S.convert_files(list(self.all_poses))["CatArt.sitting.generated.swift"]
+        used = re.findall(r"PathData\.build\((\w+)\)", sitting)
+        declared = re.findall(r"private let (\w+): \[Float\] = \[", sitting)
+        self.assertEqual(sorted(used), sorted(declared))
+        self.assertEqual(len(used), len(set(used)))
+
+    def test_committed_generated_files_match_the_generator(self):
+        """커밋된 생성물이 지금 생성기의 출력과 한 바이트도 다르지 않아야 한다.
+
+        어긋나면 누가 생성물을 손으로 고쳤거나 생성기를 고치고 안 돌린 것이다.
+        고치는 법: `scripts/generate-cat-art.sh`.
+        """
+        out_dir = os.path.join(REPO, "Sources", "ClaudeCats")
+        files = S.convert_files(list(self.all_poses))
+        on_disk = sorted(
+            name for name in os.listdir(out_dir)
+            if name.startswith("CatArt.") and name.endswith(".generated.swift")
+        )
+        self.assertEqual(on_disk, sorted(files))
+        for name in sorted(files):
+            with open(os.path.join(out_dir, name), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), files[name],
+                                 "%s 가 생성기 출력과 다르다 — generate-cat-art.sh 를 돌려라" % name)
+
+    def test_encoded_art_round_trips_to_the_same_commands(self):
+        """진짜 그림 전체가 인코딩 → 디코딩을 거쳐도 명령이 그대로여야 한다."""
+        for path in self.all_poses:
+            with open(path, encoding="utf-8") as f:
+                groups = S.parse_svg(f.read())
+            for layers in groups.values():
+                for layer in layers:
+                    self.assertEqual(S.decode_path(S.encode_path(layer.cmds)), layer.cmds)
 
     def test_top_is_inside_the_box_and_above_the_middle(self):
         for path in self.all_poses:
