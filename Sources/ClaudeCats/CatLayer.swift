@@ -8,6 +8,10 @@ import ClaudeCatsCore
 /// 메인 스레드에서만 사용한다 (DesktopWindow 가 유일한 호출자)
 final class CatLayer: CALayer {
     private(set) var placement: CatPlacement
+    /// 지금 그리는 고양이 종류의 아트 묶음. 종류가 바뀌면 `setArt` 로 갈아끼우고 몸·꼬리를 다시 만든다.
+    private var art: CatArtSet
+    /// 이 종류·포즈에 꼬리 프레임이 있는지. 없으면(동글캣) `tickTail` 은 아무것도 안 한다.
+    private var hasTailFrames = false
     /// 아트 레이어를 담는 그릇. 포즈가 바뀌면 안을 비우고 다시 채운다.
     private let tailA = CALayer()
     private let tailB = CALayer()
@@ -28,8 +32,9 @@ final class CatLayer: CALayer {
     /// 최초 apply 는 모든 서브레이어를 채워야 한다. 이후로는 바뀐 것만 건드린다.
     private var hasApplied = false
 
-    init(placement: CatPlacement, contentsScale: CGFloat) {
+    init(placement: CatPlacement, contentsScale: CGFloat, art: CatArtSet) {
         self.placement = placement
+        self.art = art
         super.init()
         anchorPoint = .zero
         bounds = CGRect(x: 0, y: 0, width: CatShapes.boxSize, height: CatShapes.boxSize)
@@ -73,6 +78,7 @@ final class CatLayer: CALayer {
         // presentation layer 복사용. 우리는 애니메이션 프로퍼티를 쓰지 않으므로 원본 값 복사만.
         let other = layer as! CatLayer
         self.placement = other.placement
+        self.art = other.art
         super.init(layer: layer)
     }
 
@@ -101,11 +107,9 @@ final class CatLayer: CALayer {
             rebuildArt(for: p.pose)
         }
 
-        if colorChanged || poseChanged {
-            let colors = CatShapes.palette[p.paletteIndex % CatShapes.palette.count]
-            paint(furSlots, with: colors.fur.cgColor)
-            paint(furDarkSlots, with: colors.furDark.cgColor)
-            paint(furLightSlots, with: colors.furLight.cgColor)
+        if (colorChanged || poseChanged) && art.recolorable {
+            // 색이 고정인 종류(동글캣)는 팔레트를 무시한다 — 도형이 이미 .fixed 라 칠할 자리도 없다.
+            recolor(paletteIndex: p.paletteIndex)
         }
 
         if first || p.label != previous.label {
@@ -142,10 +146,26 @@ final class CatLayer: CALayer {
     }
 
     func tickTail() {
-        guard placement.pose == .sitting || placement.pose == .alert else { return }
+        guard hasTailFrames, placement.pose == .sitting || placement.pose == .alert else { return }
         tailToggle.toggle()
         tailA.isHidden = tailToggle
         tailB.isHidden = !tailToggle
+    }
+
+    /// 고양이 종류가 바뀌면(메뉴 `고양이 종류`) 아트 묶음을 갈아끼우고 몸·꼬리를 다시 만든다.
+    /// 포즈가 바뀔 때와 같은 경로다 — 종류마다 그림·색·말풍선 꼭대기(Top)가 다르다.
+    func setArt(_ newArt: CatArtSet) {
+        art = newArt
+        rebuildArt(for: placement.pose)
+        if art.recolorable { recolor(paletteIndex: placement.paletteIndex) }
+        applyBubble(placement)   // 종류마다 그림 꼭대기가 달라 꼭지 y 를 다시 잡는다
+    }
+
+    private func recolor(paletteIndex: Int) {
+        let colors = CatShapes.palette[paletteIndex % CatShapes.palette.count]
+        paint(furSlots, with: colors.fur.cgColor)
+        paint(furDarkSlots, with: colors.furDark.cgColor)
+        paint(furLightSlots, with: colors.furLight.cgColor)
     }
 
     // MARK: - 아트 구성
@@ -161,26 +181,28 @@ final class CatLayer: CALayer {
 
         switch pose {
         case .sitting:
-            build(CatArt.sittingBody, into: bodyLayer)
-            build(CatArt.sittingTailA, into: tailA)
-            build(CatArt.sittingTailB, into: tailB)
+            build(art.sittingBody, into: bodyLayer)
+            build(art.sittingTailA, into: tailA)
+            build(art.sittingTailB, into: tailB)
             tailA.isHidden = false
             tailB.isHidden = true
-            orderArt(tailAboveBody: CatArt.sittingTailAboveBody)
+            orderArt(tailAboveBody: art.sittingTailAboveBody)
         case .alert:
-            build(CatArt.alertBody, into: bodyLayer)
-            build(CatArt.alertTailA, into: tailA)
-            build(CatArt.alertTailB, into: tailB)
+            build(art.alertBody, into: bodyLayer)
+            build(art.alertTailA, into: tailA)
+            build(art.alertTailB, into: tailB)
             tailA.isHidden = false
             tailB.isHidden = true
-            orderArt(tailAboveBody: CatArt.alertTailAboveBody)
+            orderArt(tailAboveBody: art.alertTailAboveBody)
         case .sleeping:
             // idle 은 꼬리가 몸에 붙은 정지 그림이라 프레임 레이어를 쓰지 않는다.
-            build(CatArt.sleepingBody, into: bodyLayer)
+            build(art.sleepingBody, into: bodyLayer)
             tailA.isHidden = true
             tailB.isHidden = true
             orderArt(tailAboveBody: true)
         }
+        // 꼬리 프레임이 없는 종류(동글캣)는 tailA 그릇이 비어 tickTail 이 흔들 게 없다.
+        hasTailFrames = !(tailA.sublayers?.isEmpty ?? true)
         tailToggle = false
     }
 
@@ -255,18 +277,6 @@ final class CatLayer: CALayer {
         static let fontSize: CGFloat = 10
         static let screenMargin: CGFloat = 4   // 화면 왼쪽 끝에서 띄울 여백
 
-        /// 꼭지 끝 y. 그림 꼭대기 바로 위에 둔다 — 자는 자세는 웅크려서 훨씬 낮다.
-        /// 높이는 생성기가 아트에서 재 준다(`CatArt.*Top`).
-        static func tipY(for pose: Pose) -> CGFloat {
-            let top: CGFloat
-            switch pose {
-            case .sitting: top = CatArt.sittingTop
-            case .alert: top = CatArt.alertTop
-            case .sleeping: top = CatArt.sleepingTop
-            }
-            return top + 2
-        }
-
         /// 제목은 흰 바탕에 검은 글자, 알림은 노란 바탕에 짙은 갈색 굵은 글자.
         static func fill(for style: BubbleStyle) -> CGColor {
             switch style {
@@ -276,6 +286,18 @@ final class CatLayer: CALayer {
                 return NSColor(srgbRed: 1.0, green: 0xE5 / 255, blue: 0x8A / 255, alpha: 0.97).cgColor
             }
         }
+    }
+
+    /// 꼭지 끝 y. 그림 꼭대기 바로 위에 둔다 — 자는 자세는 웅크려서 훨씬 낮다.
+    /// 높이는 생성기가 아트에서 재 준다(`CatArtSet.*Top`) — 종류마다 다르다.
+    private func tipY(for pose: Pose) -> CGFloat {
+        let top: CGFloat
+        switch pose {
+        case .sitting: top = art.sittingTop
+        case .alert: top = art.alertTop
+        case .sleeping: top = art.sleepingTop
+        }
+        return top + 2
     }
 
     private func applyBubble(_ p: CatPlacement) {
@@ -291,7 +313,7 @@ final class CatLayer: CALayer {
             Self.attributedBubble($0, style: style)
         }
         let width = min(Bubble.maxWidth, ceil(attributed.size().width) + Bubble.padding)
-        let tipY = Bubble.tipY(for: p.pose)
+        let tipY = tipY(for: p.pose)
         bubbleLayer.fillColor = Bubble.fill(for: style)
 
         // 맨 왼쪽 열(origin.x = 16)에서는 가운데 정렬한 사각형이 화면 밖으로 17pt 나간다.

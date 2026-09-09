@@ -503,6 +503,30 @@ class StrokeTests(unittest.TestCase):
 # ---------------------------------------------------------------- 실제 파일
 
 
+class ColorFlagTests(unittest.TestCase):
+    """--fur* 플래그는 선택이다. 안 주면 색을 그대로 둔다(고정색이 아니라 리터럴로 남긴다)."""
+
+    def test_no_fur_flags_keeps_colors_literal(self):
+        argv = ["src.svg", "--pose", "sleeping", "--out", "out.svg"]
+        options = I.build_arguments(argv)
+        self.assertIsNone(options.fur)
+        svg, _ = I.convert(frame('<path d="%s" fill="#817671"/>' % BOXY), options)
+        self.assertIn('fill="#817671"', svg)
+        self.assertNotIn("#FUR", svg)
+
+    def test_partial_fur_flags_substitute_only_what_is_given(self):
+        argv = ["src.svg", "--pose", "sleeping", "--out", "out.svg",
+                "--fur", "#817671", "--fur-dark", "#746965"]
+        options = I.build_arguments(argv)
+        svg, _ = I.convert(frame('<path d="%s" fill="#817671"/>'
+                                 '<path d="M0 0 L1 1" fill="#746965"/>'
+                                 '<path d="M0 0 L2 2" fill="#292827"/>' % BOXY), options)
+        self.assertIn('fill="#FUR"', svg)
+        self.assertIn('fill="#FURDARK"', svg)
+        self.assertIn('fill="#292827"', svg)     # 매핑 없는 색은 그대로
+        self.assertNotIn("FURLIGHT", svg)
+
+
 class RealSourceTests(unittest.TestCase):
     def setUp(self):
         self.sources = {
@@ -553,6 +577,47 @@ class RealSourceTests(unittest.TestCase):
         for pose in ("sitting", "sleeping"):
             svg, _ = self.run_pose(pose)
             with open(os.path.join(REPO, "Design", "cats", "%s.svg" % pose),
+                      encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), svg, pose)
+
+
+class KenjiSourceTests(unittest.TestCase):
+    """켄지(동글캣) 원본. 꼬리 프레임·alert 원본이 없어 두 포즈 다 정적으로(--pose sleeping) import 한다.
+    색은 몸통 주색(#817671→FUR)·음영(#746965→FURDARK)만 팔레트로 바꾸고 나머지는 그대로 둔다."""
+
+    def setUp(self):
+        self.sources = {
+            "sitting": os.path.join(REPO, "Design", "cats", "source", "kenji-sitting-figma.svg"),
+            "sleeping": os.path.join(REPO, "Design", "cats", "source", "kenji-sleeping-figma.svg"),
+        }
+        for path in self.sources.values():
+            if not os.path.exists(path):
+                self.skipTest("켄지 원본 SVG 가 없다: %s" % path)
+
+    def run_pose(self, pose):
+        # 꼬리·alert 가 없으므로 두 포즈 다 정적으로 다룬다(sleeping 경로).
+        options = args(pose="sleeping", fur="#817671", fur_dark="#746965")
+        options.fur_light = None
+        options.source = self.sources[pose]
+        with open(options.source, encoding="utf-8") as handle:
+            return I.convert(handle.read(), options)
+
+    def test_both_poses_have_no_tail(self):
+        for pose in ("sitting", "sleeping"):
+            svg, info = self.run_pose(pose)
+            self.assertEqual(set(S.parse_svg(svg)), {"body"}, pose)
+            self.assertEqual((info["tailA"], info["tailB"]), (0, 0), pose)
+
+    def test_fur_and_fur_dark_placeholders_present(self):
+        svg, _ = self.run_pose("sitting")
+        self.assertIn('"#FUR"', svg)
+        self.assertIn('"#FURDARK"', svg)
+        self.assertNotIn("FURLIGHT", svg)
+
+    def test_generated_files_match_the_checked_in_art(self):
+        for pose in ("sitting", "sleeping"):
+            svg, _ = self.run_pose(pose)
+            with open(os.path.join(REPO, "Design", "cats", "kenji-%s.svg" % pose),
                       encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), svg, pose)
 

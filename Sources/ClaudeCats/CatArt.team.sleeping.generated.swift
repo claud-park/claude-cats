@@ -8,11 +8,11 @@ import QuartzCore
 
 extension CatArt {
     /// 말풍선을 얹을 그림 꼭대기(AppKit y). 선 두께는 빼고 경로 bbox 만 본다.
-    static let sleepingTop: CGFloat = 36.77
+    static let teamSleepingTop: CGFloat = 36.77
 
-    static let sleepingBody: [CatArtLayer] = [
+    static let teamSleepingBody: [CatArtLayer] = [
         CatArtLayer(
-            path: PathData.build(sleepingBody0),
+            path: PathData.build(teamSleepingBody0),
             fill: .fixed(r: 0.96, g: 0.93, b: 0.91, a: 1),
             stroke: nil,
             lineWidth: 0,
@@ -22,7 +22,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody1),
+            path: PathData.build(teamSleepingBody1),
             fill: .fur,
             stroke: nil,
             lineWidth: 0,
@@ -32,7 +32,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody2),
+            path: PathData.build(teamSleepingBody2),
             fill: nil,
             stroke: .fur,
             lineWidth: 0.6,
@@ -42,7 +42,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody3),
+            path: PathData.build(teamSleepingBody3),
             fill: .fixed(r: 0.91, g: 0.75, b: 0.69, a: 1),
             stroke: nil,
             lineWidth: 0,
@@ -52,7 +52,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody4),
+            path: PathData.build(teamSleepingBody4),
             fill: .fur,
             stroke: nil,
             lineWidth: 0,
@@ -62,7 +62,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody5),
+            path: PathData.build(teamSleepingBody5),
             fill: .fixed(r: 1, g: 1, b: 1, a: 1),
             stroke: nil,
             lineWidth: 0,
@@ -72,7 +72,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody6),
+            path: PathData.build(teamSleepingBody6),
             fill: .fur,
             stroke: nil,
             lineWidth: 0,
@@ -82,7 +82,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody7),
+            path: PathData.build(teamSleepingBody7),
             fill: nil,
             stroke: .fixed(r: 0.13, g: 0.13, b: 0.13, a: 1),
             lineWidth: 0.95,
@@ -92,7 +92,7 @@ extension CatArt {
             opacity: 1
         ),
         CatArtLayer(
-            path: PathData.build(sleepingBody8),
+            path: PathData.build(teamSleepingBody8),
             fill: nil,
             stroke: .fixed(r: 1, g: 1, b: 1, a: 1),
             lineWidth: 0.6,
@@ -104,7 +104,7 @@ extension CatArt {
     ]
 }
 
-private let sleepingBody0: [Float] = [
+private let teamSleepingBody0: [Float] = [
     0, 32.67, 26.14,
     2, 31.93, 26.48, 31.13, 26.71, 30.48, 26.77,
     2, 30.47, 26.77, 30.47, 26.77, 30.47, 26.77,
@@ -1095,7 +1095,7 @@ private let sleepingBody0: [Float] = [
     3,
 ]
 
-private let sleepingBody1: [Float] = [
+private let teamSleepingBody1: [Float] = [
     0, 53.06, 18.02,
     2, 52.81, 17.91, 52.56, 17.79, 52.31, 17.68,
     1, 57.04, 14.94,
@@ -1388,7 +1388,7 @@ private let sleepingBody1: [Float] = [
     3,
 ]
 
-private let sleepingBody2: [Float] = [
+private let teamSleepingBody2: [Float] = [
     0, 22.91, 13.06,
     2, 22.91, 13.08, 22.91, 13.09, 22.91, 13.11,
     2, 22.89, 13.09, 22.86, 13.07, 22.84, 13.05,
@@ -1471,7 +1471,7 @@ private let sleepingBody2: [Float] = [
     3,
 ]
 
-private let sleepingBody3: [Float] = [
+private let teamSleepingBody3: [Float] = [
     0, 25.26, 33.59,
     2, 25.07, 34.13, 24.92, 34.79, 24.51, 35.2,
     2, 24.1, 34.89, 23.82, 33.98, 23.61, 33.49,
@@ -1519,7 +1519,7 @@ private let sleepingBody3: [Float] = [
     3,
 ]
 
-private let sleepingBody4: [Float] = [
+private let teamSleepingBody4: [Float] = [
     0, 32, 23.16,
     1, 32.94, 23.19,
     2, 32.92, 23.21, 32.91, 23.24, 32.9, 23.26,
@@ -1601,7 +1601,7 @@ private let sleepingBody4: [Float] = [
     3,
 ]
 
-private let sleepingBody5: [Float] = [
+private let teamSleepingBody5: [Float] = [
     0, 18.44, 18.28,
     2, 18.41, 18.33, 18.38, 18.38, 18.35, 18.43,
     1, 18.2, 18.54,
@@ -1737,7 +1737,7 @@ private let sleepingBody5: [Float] = [
     3,
 ]
 
-private let sleepingBody6: [Float] = [
+private let teamSleepingBody6: [Float] = [
     0, 39.03, 2.11,
     2, 39.04, 2.08, 39.05, 2.05, 39.07, 2.02,
     2, 40.66, 1.86, 42.25, 2.64, 43.7, 3.19,
@@ -1791,7 +1791,7 @@ private let sleepingBody6: [Float] = [
     3,
 ]
 
-private let sleepingBody7: [Float] = [
+private let teamSleepingBody7: [Float] = [
     0, 18.69, 14.34,
     1, 18.21, 14.02,
     2, 16.67, 12.99, 14.85, 12.44, 13, 12.44,
@@ -1800,7 +1800,7 @@ private let sleepingBody7: [Float] = [
     1, 28.19, 20.99,
 ]
 
-private let sleepingBody8: [Float] = [
+private let teamSleepingBody8: [Float] = [
     0, 30.09, 19.56,
     1, 33.37, 21.55,
 ]

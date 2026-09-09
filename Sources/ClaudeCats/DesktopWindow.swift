@@ -33,6 +33,9 @@ final class DesktopWindow {
     /// 지금 창 레벨. 화면을 다시 맞춰도 유지된다.
     private var placement: WindowPlacement
 
+    /// 지금 그리는 고양이 종류의 아트. 메뉴 `고양이 종류` 로 바뀌면 모든 고양이를 다시 만든다.
+    private var artSet: CatArtSet
+
     /// 선택한 이름의 디스플레이. 이름이 안 맞거나(뽑아버린 모니터) 없으면 메인으로 폴백한다.
     /// 저장 프로퍼티가 다 차기 전(init)에도 불러야 해서 static 이다.
     private static func targetScreen(preferredDisplayName: String?) -> NSScreen? {
@@ -60,9 +63,11 @@ final class DesktopWindow {
         )
     }
 
-    init(preferredDisplayName: String? = nil, placement: WindowPlacement = .desktop) {
+    init(preferredDisplayName: String? = nil, placement: WindowPlacement = .desktop,
+         concept: CatConcept = .team) {
         self.preferredDisplayName = preferredDisplayName
         self.placement = placement
+        self.artSet = CatArt.set(concept)
         let screen = Self.targetScreen(preferredDisplayName: preferredDisplayName)
         let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let scale = screen?.backingScaleFactor ?? 2
@@ -100,6 +105,16 @@ final class DesktopWindow {
         guard new != placement else { return }
         placement = new
         Self.apply(new, to: window)
+    }
+
+    /// 메뉴에서 `고양이 종류` 를 고르면 호출된다. 창·레이아웃은 그대로 두고 각 고양이의 아트만
+    /// 갈아끼운다(포즈 변경과 같은 경로) — 위치가 안 바뀌므로 깜빡이지 않는다.
+    func setConcept(_ concept: CatConcept) {
+        artSet = CatArt.set(concept)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in layers.values { layer.setArt(artSet) }
+        CATransaction.commit()
     }
 
     /// `WindowPlacement` → 실제 `NSWindow.Level` · collectionBehavior.
@@ -153,7 +168,7 @@ final class DesktopWindow {
             layers[cat.id]?.apply(cat)
         }
         for cat in diff.added {
-            let layer = CatLayer(placement: cat, contentsScale: rootLayer.contentsScale)
+            let layer = CatLayer(placement: cat, contentsScale: rootLayer.contentsScale, art: artSet)
             layer.opacity = 0
             rootLayer.addSublayer(layer)
             layers[cat.id] = layer

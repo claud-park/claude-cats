@@ -431,9 +431,11 @@ def build_arguments(argv):
     # alert 는 sitting 과 같게 다룬다 — 꼬리 두 프레임을 그대로 살린다.
     parser.add_argument("--pose", required=True, choices=("sitting", "sleeping", "alert"))
     parser.add_argument("--out", required=True)
-    parser.add_argument("--fur", required=True, help="몸통 털색 (예: '#7D6C62')")
-    parser.add_argument("--fur-dark", required=True, help="어두운 털색 (예: '#66584F')")
-    parser.add_argument("--fur-light", required=True, help="밝은 털색 (예: '#A09084')")
+    # 팔레트로 색을 바꾸는 고양이(팀/푹신캣)만 이 세 색을 플레이스홀더로 치환한다. 색이 고정인
+    # 고양이(켄지/동글캣)는 셋 다 생략한다 — 그러면 원본 색이 리터럴로 남아 svg2swift 가 .fixed 로 낸다.
+    parser.add_argument("--fur", default=None, help="몸통 털색 (예: '#7D6C62'). 생략하면 색을 치환하지 않는다")
+    parser.add_argument("--fur-dark", default=None, help="어두운 털색 (예: '#66584F')")
+    parser.add_argument("--fur-light", default=None, help="밝은 털색 (예: '#A09084')")
     parser.add_argument("--tail-paths", default=None,
                         help="id 가 없을 때 쓰는 1-based path 순번 목록 (예: 12,13,14)")
     parser.add_argument("--tail-angle", type=float, default=-8.0,
@@ -551,11 +553,13 @@ def convert(text, args):
     ty = BOX - args.pad - scale * box[3]                    # 바닥 정렬
     fit = "translate(%s %s) scale(%s)" % (num(tx), num(ty), num(scale))
 
-    colors = {
-        normal_color(args.fur): "#FUR",
-        normal_color(args.fur_dark): "#FURDARK",
-        normal_color(args.fur_light): "#FURLIGHT",
-    }
+    # 준 색만 플레이스홀더로 바꾼다. 하나도 안 주면 색을 그대로 둔다(고정색 고양이).
+    colors = {}
+    for value, placeholder in (
+        (args.fur, "#FUR"), (args.fur_dark, "#FURDARK"), (args.fur_light, "#FURLIGHT")
+    ):
+        if value:
+            colors[normal_color(value)] = placeholder
 
     tail_above = bool(tail_a) and tail_a[0].index is not None \
         and tail_a[0].index > largest_body_index(body)

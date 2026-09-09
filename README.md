@@ -108,6 +108,7 @@ self-signed 든 ad-hoc 이든 이 서명은 **자기 맥에 직접 빌드해 설
 | `자동으로 업데이트 확인` | 자동 확인 켜기/끄기 (기본 켜짐) |
 | `디스플레이` | 고양이를 그릴 화면 선택 |
 | `표시 위치` | 창 레벨 선택 — 바탕화면 / 창 아래 / 항상 위 ([아래](#표시-위치)) |
+| `고양이 종류` | 그림 선택 — 푹신캣 / 동글캣 ([아래](#고양이-종류)) |
 | `알림 연동` | Claude Code 훅 설치/해제 (아래 참고) |
 | `로그인 시 시작` | 로그인 항목 등록/해제 |
 | `종료` | 앱 종료 |
@@ -138,6 +139,30 @@ self-signed 든 ad-hoc 이든 이 서명은 **자기 맥에 직접 빌드해 설
 선택은 `UserDefaults` (`windowPlacement`) 에 raw value(`desktop` / `aboveIcons` /
 `alwaysOnTop`)로 저장한다. 키가 없거나 모르는 값이면 `바탕화면` 이다. 바꿔도 창을 다시 만들지
 않고 레벨만 갈아 끼우므로 고양이가 깜빡이지 않는다.
+
+## 고양이 종류
+
+`고양이 종류` 하위 메뉴에서 두 그림 중에 고른다(한 번에 하나, 고른 항목에 체크가 붙는다).
+모든 고양이가 같은 종류로 함께 바뀐다.
+
+| 항목 | 그림 | 색 |
+| --- | --- | --- |
+| `푹신캣` | 기본 팀 고양이. 앉기·자기·알림 세 포즈에 꼬리를 흔든다 | 세션마다 8색 팔레트 중 하나 |
+| `동글캣` | 회색 스코티시폴드풍 고양이. 접힌 귀·동그란 몸통 | 세션마다 팔레트로 몸통색이 갈린다 |
+
+두 종류 다 세션 이름 해시로 색이 정해져 세션마다 몸통색이 다르다. 다만 **동글캣은 몸통 주색과
+그 음영(`FUR`/`FURDARK`)만** 팔레트로 바뀌고, 눈·코 윤곽·코·얼굴 크림색·수염은 고정이다
+(원본에 그 색만 있고 하이라이트 `FURLIGHT` 색은 없다).
+
+**동글캣은 꼬리를 흔들지 않는다.** 원본 SVG(`kenji-*-figma.svg`)에 꼬리 프레임
+(`tail-a`/`tail-b`)이 없어서다 — 꼬리는 몸통에 붙은 정지 그림으로 들어간다. 흔들게 하려면
+Figma 에서 꼬리 프레임을 `tail-a`/`tail-b` 로 이름 붙여 다시 내보내고
+(`고양이 종류`·[직접 그린 SVG](#직접-그린-svg-넣는-법) 참고), `generate-cat-art.sh` 의 켄지 import 에서
+`--pose sitting` 으로 바꾸면 된다. 알림(`alert`) 포즈도 원본이 없어 앉은 그림을 그대로 쓴다.
+
+선택은 `UserDefaults` (`catConcept`) 에 raw value(`team` = 푹신캣 / `kenji` = 동글캣)로 저장한다
+— 내부 식별자는 소스·생성 파일 이름과 묶여 있어 표시 이름과 다르다. 키가 없거나 모르는 값이면
+`푹신캣` 이다. 바꿔도 창·배치는 그대로 두고 각 고양이의 그림만 갈아끼우므로 깜빡이지 않는다.
 
 ## 업데이트
 
@@ -383,24 +408,28 @@ log stream --predicate 'subsystem == "claude-cats"' --level info
 파이프라인은 두 단계다.
 
 ```
-Design/cats/source/<포즈>-figma.svg   ← Figma 에서 내보낸 원본(사람이 관리하는 유일한 그림)
-  └ scripts/import-cat-svg.py         ← 껍데기 벗기기 · 64 상자 맞추기 · 털색 치환
-Design/cats/<포즈>.svg                ← 생성물. 손으로 고치지 말 것
-  └ scripts/svg2swift.py              ← 경로 데이터로 변환
-Sources/ClaudeCats/CatArt.generated.swift           ← 생성물. 커밋은 한다
-Sources/ClaudeCats/CatArt.sitting.generated.swift   ← 생성물. 커밋은 한다
-Sources/ClaudeCats/CatArt.sleeping.generated.swift  ← 생성물. 커밋은 한다
-Sources/ClaudeCats/CatArt.alert.generated.swift     ← 생성물. 커밋은 한다
+Design/cats/source/<컨셉>-<포즈>-figma.svg  ← Figma 에서 내보낸 원본(사람이 관리하는 유일한 그림)
+  └ scripts/import-cat-svg.py               ← 껍데기 벗기기 · 64 상자 맞추기 · 털색 치환
+Design/cats/<포즈>.svg | kenji-<포즈>.svg    ← 생성물. 손으로 고치지 말 것
+  └ scripts/svg2swift.py                    ← 경로 데이터로 변환
+Sources/ClaudeCats/CatArt.generated.swift                 ← 생성물. 커밋은 한다
+Sources/ClaudeCats/CatArt.<컨셉>.<포즈>.generated.swift    ← 생성물. 커밋은 한다 (컨셉·포즈마다 하나)
 ```
 
-런타임에 SVG 를 파싱하지 않으므로 그림을 바꾸면 스크립트를 다시 돌려야 한다.
+기본 컨셉(팀 = 푹신캣)의 원본은 `<포즈>-figma.svg`(접두어 없음), 켄지(동글캣)는
+`kenji-<포즈>-figma.svg` 다. 런타임에 SVG 를 파싱하지 않으므로 그림을 바꾸면 스크립트를 다시
+돌려야 한다.
 
 ### 생성 파일
 
 | 파일 | 내용 |
 | --- | --- |
-| `CatArt.generated.swift` | `CatArtColor` · `CatArtLayer` · `enum CatArt` 껍데기. 좌표는 한 개도 없다. `alert.svg` 가 없을 때 쓰는 별칭도 여기 있다 |
-| `CatArt.<포즈>.generated.swift` | 그 포즈의 `CatArt.<포즈>Top` · `<포즈>TailAboveBody` · `<포즈>Body/TailA/TailB` 와 경로 데이터 |
+| `CatArt.generated.swift` | `CatArtColor` · `CatArtLayer` · `CatArtSet` 타입과, 컨셉별 `CatArtSet`(`CatArt.team`/`CatArt.kenji`) · `CatArt.set(_:)` 스위치. 좌표는 한 개도 없다. 꼬리 프레임이나 `alert` 원본이 없는 컨셉은 여기서 빈 배열·sitting 폴백으로 채운다 |
+| `CatArt.<컨셉>.<포즈>.generated.swift` | 그 컨셉·포즈의 `<컨셉><포즈>Top` · `<컨셉><포즈>TailAboveBody` · `<컨셉><포즈>Body/TailA/TailB` 와 경로 데이터 |
+
+컨셉(고양이 종류)은 `CatConcept`(Core) 로 정하고 `UserDefaults` 의 `catConcept` 에 저장한다.
+`CatArtSet.recolorable` 이 true 인 컨셉만 팔레트로 색을 입힌다(두 컨셉 다 true — 향후 색이
+완전히 고정인 컨셉을 위해 필드는 남겨 둔다).
 
 **경로는 코드가 아니라 데이터로 싣는다.** 예전에는 `p.addCurve(to:control1:control2:)`
 문장을 도형마다 수천 개 펼쳤는데, 타입체커가 그 호출식을 전부 씹느라
@@ -461,8 +490,24 @@ python3 -m unittest scripts/test_import_cat_svg.py scripts/test_svg2swift.py
 털색 세 가지(`FUR` / `FUR_DARK` / `FUR_LIGHT`)의 **정본은 `scripts/generate-cat-art.sh`**
 맨 위에 있다. Figma 파일의 색을 바꾸면 거기만 고치면 된다.
 
-`alert.svg` 는 아직 없어도 된다 — 그러면 생성기가 앉은 자세를 `CatArt.alert*` 이름으로 그대로
-별칭 삼아, 런타임(`CatLayer`)이 참조하는 상수가 항상 존재한다.
+`alert.svg` 는 아직 없어도 된다 — 그러면 그 컨셉의 `CatArtSet` 이 `alert*` 자리에 앉은 자세를
+그대로 쓴다(폴백). 그래서 런타임(`CatLayer`)이 참조하는 아트가 항상 존재한다.
+
+### 고양이 종류(컨셉) 추가하기
+
+새 종류를 더하려면:
+
+1. Figma 원본을 `Design/cats/source/<컨셉>-sitting-figma.svg` /
+   `<컨셉>-sleeping-figma.svg`(꼬리·alert 가 있으면 그 원본도)로 떨군다.
+2. `scripts/generate-cat-art.sh` 에 그 컨셉의 import 줄과 `svg2swift` 입력
+   (`<컨셉>:<포즈>=<svg>`)을 더한다. 색이 팔레트로 바뀌길 원하면 몸통색을 `--fur`(음영은
+   `--fur-dark`, 하이라이트는 `--fur-light`)로 넘겨 플레이스홀더로 치환하고, 색을 그대로
+   두려면 `--fur*` 를 생략한다.
+3. `Sources/ClaudeCatsCore/CatConcept.swift` 의 `enum CatConcept` 에 case 를 더하고
+   `title`(메뉴 표기)을 정한다. 그러면 `CatArt.set(_:)` 스위치가 exhaustive 하지 않아
+   컴파일이 막히므로, 생성기(2번)를 돌려 그 컨셉의 `CatArtSet` 을 만들면 맞아 떨어진다.
+4. rawValue(case 이름)는 `UserDefaults`·소스/생성 파일 이름과 묶이므로 한 번 정하면 바꾸지
+   않는다.
 
 `generate-cat-art.sh` 는 `Design/cats/source/<포즈>-figma.svg` 가 있을 때만 import 를 돌린다.
 원본 없이 `Design/cats/*.svg` 를 손으로 그려 쓰는 예전 방식도 되지만, 그때
@@ -478,7 +523,7 @@ python3 -m unittest scripts/test_import_cat_svg.py scripts/test_svg2swift.py
 | 꼬리 뽑기 | `tail-a` / `tail-b` id 를 가진 요소를 꼬리 프레임으로 뽑는다. id 가 없으면 `--tail-paths 12,13,14`(1-based path 순번). 둘 다 없으면 중단 |
 | 두 번째 프레임 | 원본에 `tail-b` 가 있으면 **그대로 쓴다**. `tail-a` 만 있으면 꼬리 밑동(bbox 의 minX·maxY)을 축으로 `--tail-angle`(기본 −8°) 만큼 돌린 프레임을 만든다 |
 | 상자 맞추기 | 그림 전체 bbox 를 64×64 상자에 균일 스케일로 맞춘다. `scale = (64 − 2·pad) / max(폭, 높이)`, 가로는 가운데, 세로는 **바닥 정렬**(고양이가 바닥에 선다). `--pad` 기본 2 |
-| 색 치환 | `--fur` / `--fur-dark` / `--fur-light` 로 준 색을 `#FUR` / `#FURDARK` / `#FURLIGHT` 로 바꾼다(대소문자·3자리 축약 무시) |
+| 색 치환 | `--fur` / `--fur-dark` / `--fur-light` 로 **준 색만** `#FUR` / `#FURDARK` / `#FURLIGHT` 로 바꾼다(대소문자·3자리 축약 무시). 셋 다 생략하면 색을 그대로 둔다 — 그 컨셉은 색이 안 바뀌는(`recolorable == false`) 고양이가 된다 |
 | stroke 정리 | 아래 표 참고 |
 
 자는 자세는 런타임에 꼬리 토글이 없다. 그래서 `tail-a` 는 문서 순서 그대로 몸통에 접고
