@@ -16,13 +16,24 @@ final class StatusMenu: NSObject {
     private let placementItem = NSMenuItem(title: "표시 위치", action: nil, keyEquivalent: "")
     private let placementMenu = NSMenu()
     private let hooksItem = NSMenuItem(title: "알림 연동", action: #selector(toggleHooks), keyEquivalent: "")
+    /// 읽기 전용 버전 줄. 번들에 박힌 커밋을 그대로 보여준다.
+    private let versionItem = NSMenuItem(title: "버전", action: nil, keyEquivalent: "")
+    private let updateItem = NSMenuItem(title: "업데이트 확인…", action: #selector(updateAction), keyEquivalent: "")
+    private let autoUpdateItem = NSMenuItem(
+        title: "자동으로 업데이트 확인", action: #selector(toggleAutoUpdate), keyEquivalent: ""
+    )
     private let onPauseToggle: (Bool) -> Void
     private let onRefresh: () -> Void
     private let onDisplaySelect: (String?) -> Void
     private let onPlacementSelect: (WindowPlacement) -> Void
+    private let updater = Updater()
     private var paused = false
     private var preferredDisplayName: String?
     private var placement: WindowPlacement = .desktop
+    /// 마지막 폴링이 만든 요약 문자열. 업데이트 중에는 이 자리를 진행 표시가 빌려 쓴다.
+    private var summaryText = "고양이 0마리"
+    /// 메뉴바 아이콘이 실제 이미지인지. 배지(`•`)를 어디에 붙일지가 달라진다.
+    private var hasIconImage = false
 
     init(
         onPauseToggle: @escaping (Bool) -> Void,
@@ -41,6 +52,7 @@ final class StatusMenu: NSObject {
             ?? NSImage(systemSymbolName: "pawprint", accessibilityDescription: "Claude Cats")
         if let image {
             item.button?.image = image
+            hasIconImage = true
         } else {
             // 두 심볼 다 없는 OS 라면 이미지 없이 빈 칸만 남는다 — 누를 수 있게 글자를 넣는다.
             item.button?.title = "🐱"
@@ -57,10 +69,13 @@ final class StatusMenu: NSObject {
         summaryItem.isEnabled = false                                  // 읽기 전용 요약 줄
         healthItem.isEnabled = false                                   // 읽기 전용 경고 줄
         healthItem.isHidden = true                                     // 문제가 있을 때만 보인다
+        versionItem.isEnabled = false                                  // 읽기 전용 버전 줄
         for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, hooksItem] {
             entry.isEnabled = true
         }
-        for entry in [pauseItem, refresh, loginItem, hooksItem] { entry.target = self }
+        for entry in [pauseItem, refresh, loginItem, hooksItem, updateItem, autoUpdateItem] {
+            entry.target = self
+        }
         // quit 은 target 없이 응답 체인을 타고 NSApp.terminate 로 간다.
 
         // 하위 메뉴는 열릴 때마다 menuNeedsUpdate 에서 다시 만든다(모니터가 꽂혔다 빠진다).
@@ -78,6 +93,11 @@ final class StatusMenu: NSObject {
         menu.addItem(.separator())
         menu.addItem(pauseItem)
         menu.addItem(refresh)
+        menu.addItem(.separator())
+        menu.addItem(versionItem)
+        menu.addItem(updateItem)
+        menu.addItem(autoUpdateItem)
+        menu.addItem(.separator())
         menu.addItem(displayItem)
         menu.addItem(placementItem)
         menu.addItem(hooksItem)
@@ -90,6 +110,10 @@ final class StatusMenu: NSObject {
         updateHooksState()
         rebuildDisplayMenu()
         rebuildPlacementMenu()
+
+        updater.onChange = { [weak self] in self?.renderUpdate() }
+        renderUpdate()
+        updater.scheduleFirstCheck()
     }
 
     /// 현재 선택(자동 = nil)을 알려준다. 메뉴 체크 표시에만 쓴다.
@@ -150,7 +174,8 @@ final class StatusMenu: NSObject {
         let kittens = snapshot.sessions.reduce(0) { $0 + $1.subagents.count }
         var text = "고양이 \(snapshot.sessions.count)마리 · 작업 중 \(busy)"
         if kittens > 0 { text += " · 새끼 \(kittens)" }
-        summaryItem.title = text
+        summaryText = text
+        renderSummary()
 
         if let warning = Self.healthWarning(snapshot.health) {
             healthItem.title = warning
@@ -176,6 +201,52 @@ final class StatusMenu: NSObject {
             return "⚠️ 세션 파일 \(health.failures)개 읽기 실패"
         }
         return nil
+    }
+
+    // MARK: - 업데이트
+
+    /// `Updater` 상태를 메뉴에 그대로 옮긴다. 상태가 바뀔 때마다 불린다.
+    private func renderUpdate() {
+        versionItem.title = updater.stamp.summary
+        updateItem.title = updater.menuTitle
+        updateItem.isEnabled = updater.isActionable
+        autoUpdateItem.state = updater.autoCheckEnabled ? .on : .off
+        // 도는 중에 자동 확인을 껐다 켜 봐야 지금 도는 일을 못 멈춘다 — 끝날 때까지 잠근다.
+        autoUpdateItem.isEnabled = !updater.isInstalling
+        setBadge(updater.hasUpdate)
+        renderSummary()
+    }
+
+    /// 업데이트 중에는 요약 줄이 진행 표시를 맡는다(빌드가 분 단위라 아무 말도 없으면 멈춘 줄 안다).
+    private func renderSummary() {
+        summaryItem.title = updater.isInstalling ? "업데이트 중… (빌드)" : summaryText
+    }
+
+    /// 받을 게 있다는 표시. 커스텀 이미지 대신 아이콘 옆에 점 하나를 붙인다.
+    /// 글자를 붙이면 `squareLength` 로는 잘리므로 길이도 같이 바꾼다.
+    private func setBadge(_ show: Bool) {
+        guard let button = item.button else { return }
+        if hasIconImage {
+            button.title = show ? "•" : ""
+            button.imagePosition = show ? .imageLeading : .imageOnly
+        } else {
+            button.title = show ? "🐱•" : "🐱"
+        }
+        item.length = show ? NSStatusItem.variableLength : NSStatusItem.squareLength
+    }
+
+    /// 확인 결과가 있으면 설치, 없으면 확인. 제목이 그때그때 무엇을 할지 말해 준다.
+    @objc private func updateAction() {
+        if updater.hasUpdate {
+            updater.install()
+        } else {
+            updater.check(userInitiated: true)
+        }
+    }
+
+    @objc private func toggleAutoUpdate() {
+        updater.autoCheckEnabled = !updater.autoCheckEnabled
+        renderUpdate()
     }
 
     @objc private func togglePause() {
@@ -225,6 +296,9 @@ extension StatusMenu: NSMenuDelegate {
             rebuildDisplayMenu()
         } else {
             updateHooksState()
+            // 자동 확인은 반복 타이머 대신 여기에 얹는다 — 앱이 며칠 떠 있어도 폴링 틱에는
+            // 비용이 0이고, 메뉴를 열었을 때 마지막 확인이 하루보다 오래됐으면 그때 한 번 본다.
+            updater.checkIfDue()
         }
     }
 }
