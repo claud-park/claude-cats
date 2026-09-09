@@ -14,9 +14,15 @@ swift build               # 빌드
 .build/debug/ClaudeCats   # 실행 (창 없이 바탕화면에 그린다)
 ./scripts/test.sh         # 테스트 (Xcode 없이 CLT 만 있어도 돈다 — 아래 각주)
 
-./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성
+./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성 (앱 아이콘 포함)
 open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 ```
+
+앱 아이콘은 `scripts/make-icon.swift` 가 `Design/cats/sitting.svg` 에서 만든다 —
+`#FUR` 계열 플레이스홀더를 팔레트 0번 색으로 채우고, 알파 경계상자를 재서 고양이를
+가운데·8% 여백으로 10가지 크기에 렌더한 뒤 `iconutil` 로 `dist/AppIcon.icns` 를
+굽는다. 그림이 그대로면 다시 굽지 않고, `iconutil` 이 없으면 경고만 남기고
+아이콘 없이 번들을 만든다.
 
 > **`swift test` 대신 `./scripts/test.sh` 를 쓰는 이유** — Xcode 없이 Command Line Tools
 > 만 깔린 맥에서는 `swift test` 가 `no such module 'Testing'` →
