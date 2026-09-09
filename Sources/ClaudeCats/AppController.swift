@@ -8,8 +8,12 @@ final class AppController {
     private let collector: StateCollector
     private let window: DesktopWindow
     private let queue = DispatchQueue(label: "claude-cats.collector", qos: .utility)
-    /// 둘 다 collector 큐에서만 만진다(ChangeGate 는 직렬 큐 전용).
+    /// 셋 다 collector 큐에서만 만진다(ChangeGate 는 직렬 큐 전용).
     private let gate = ChangeGate<Snapshot>()
+    /// Snapshot 동등성은 sessions 만 본다 — 고양이 배치가 안 바뀌면 다시 그릴 이유가 없으니까.
+    /// 그러면 "세션 목록은 그대로인데 파싱 실패가 생겼다"가 gate 에서 통째로 삼켜진다.
+    /// 그 경우에도 메뉴 경고 줄은 갱신돼야 하므로 health 는 따로 문지기를 둔다.
+    private let healthGate = ChangeGate<CollectorHealth>()
     private let powerGate = ChangeGate<Bool>()
     private let log = Logger(subsystem: "claude-cats", category: "controller")
     private var timer: DispatchSourceTimer?
@@ -56,7 +60,7 @@ final class AppController {
         // @Sendable 를 명시하지 않으면 클로저가 MainActor 격리를 상속받아
         // utility 큐에서 실행될 때 Swift 6 격리 검사가 트랩한다.
         let powerCheck = powerSourceCheck
-        source.setEventHandler { @Sendable [collector, gate, powerGate, weak self] in
+        source.setEventHandler { @Sendable [collector, gate, healthGate, powerGate, weak self] in
             let snapshot = Self.collectTimed(collector)
             // 배터리도 collector 큐에서 확인하고, 바뀐 틱에만 메인으로 올린다.
             if let powerCheck {
@@ -68,7 +72,11 @@ final class AppController {
                 }
             }
             // 변화 판정을 collector 큐에서 끝내서, 안 바뀌었으면 메인 큐를 아예 깨우지 않는다.
-            guard gate.shouldSend(snapshot) else { return }
+            // 둘 다 **먼저** 호출해야 한다 — `||` 로 묶으면 단락 평가에 밀린 쪽이 기준값을
+            // 갱신하지 못해 다음 틱에 가짜 변화를 만든다.
+            let sessionsChanged = gate.shouldSend(snapshot)
+            let healthChanged = healthGate.shouldSend(snapshot.health)
+            guard sessionsChanged || healthChanged else { return }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.handle(snapshot) }
             }
@@ -76,7 +84,7 @@ final class AppController {
         // 타이머가 없던 동안(슬립·잠금·일시정지) PowerMonitor 가 refreshPowerSource 로
         // 전원을 직접 고쳐 쓸 수 있다 — 게이트는 그걸 모른다. 비워두면 새 타이머의
         // 첫 틱이 무조건 권위 있는 보고가 되어, 게이트가 진짜 변화를 삼키는 일이 없다.
-        queue.async { @Sendable [powerGate] in powerGate.reset() }
+        queue.async { @Sendable [powerGate] in powerGate.reset() }   // 첫 틱을 무조건 통과시킨다
         source.resume()
         timer = source
         pollNow()
@@ -85,9 +93,10 @@ final class AppController {
     /// 수동 갱신. 게이트를 우회해 항상 메인으로 넘긴다(모드 전환·"지금 새로고침" 용).
     /// 최종 렌더 여부는 메인의 `handle(_:)` 이 판단한다.
     func pollNow() {
-        queue.async { @Sendable [collector, gate, weak self] in
+        queue.async { @Sendable [collector, gate, healthGate, weak self] in
             let snapshot = Self.collectTimed(collector)
             gate.record(snapshot)   // 우회하더라도 게이트 상태는 맞춰둔다
+            healthGate.record(snapshot.health)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.handle(snapshot) }
             }
@@ -114,6 +123,9 @@ final class AppController {
         // 타이머 취소와 메인 큐 도착 사이에 낀 틱. 정지 상태에서 다시 그리면
         // 잠금·슬립 중에 창을 건드린다. 버리면 된다 — 재개할 때 setMode 가 pollNow 를 부른다.
         guard mode != .suspended else { return }
+        // 메뉴는 health 만 바뀌어도 갱신한다 — 요약 문자열이 그대로면 아무 일도 안 일어나는
+        // 싼 호출이고, 그래야 "세션 목록은 그대로인데 파싱이 깨졌다"가 메뉴에 뜬다.
+        onSnapshot?(snapshot)
         guard snapshot != lastSnapshot || lastAnimationsEnabled != mode.animationsEnabled else { return }
         render(snapshot)
     }
@@ -131,6 +143,5 @@ final class AppController {
             config: config
         )
         window.apply(layout)
-        onSnapshot?(snapshot)
     }
 }

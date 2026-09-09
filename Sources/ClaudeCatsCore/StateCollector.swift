@@ -29,8 +29,9 @@ public final class StateCollector: @unchecked Sendable {
     private let claudeDir: URL
     private let log = Logger(subsystem: "claude-cats", category: "collector")
 
-    /// key: sessions/<pid>.json 경로. session 이 nil 이면 파싱 실패(비대화형/깨진 JSON)의 부정 캐시.
-    private var sessionCache: [String: (modified: Date, session: Session?)] = [:]
+    /// key: sessions/<pid>.json 경로. 실패도 캐시한다(같은 mtime 을 매 틱 다시 파싱하지 않게).
+    /// 실패 이유까지 들고 있어야 캐시에 걸린 파일도 health 에 제대로 셀 수 있다.
+    private var sessionCache: [String: (modified: Date, outcome: SessionParse)] = [:]
     /// key: sessionId. url 이 nil 이면 실패 캐시(checkedAt + projectLookupRetry 후 재시도).
     private var projectRootCache: [String: (url: URL?, checkedAt: Date)] = [:]
     /// key: meta.json 경로 → description. 이번 틱에 실행 중으로 판정된 서브에이전트의
@@ -77,31 +78,54 @@ public final class StateCollector: @unchecked Sendable {
         var seenIds = Set<String>()
         var seenMetaPaths = Set<String>()
 
+        // 왜 세는지는 CollectorHealth 주석 참고. 캐시에 걸린 파일도 매 틱 다시 센다 —
+        // 이 값은 "이번 틱에 본 것"이지 "이번 틱에 파싱한 것"이 아니다.
+        var health = CollectorHealth()
+
         for file in files where file.pathExtension == "json" {
-            guard let st = try? fs.stat(file) else { continue }
+            health.sessionFiles += 1
+            guard let st = try? fs.stat(file) else {
+                health.unreadable += 1
+                continue
+            }
             seenPaths.insert(file.path)
 
             var session: Session
             if let cached = sessionCache[file.path], cached.modified == st.modified {
-                guard let cachedSession = cached.session else { continue }
-                session = cachedSession
+                switch cached.outcome {
+                case .session(let cachedSession): session = cachedSession
+                case .malformed: health.malformed += 1; continue
+                case .nonInteractive: health.nonInteractive += 1; continue
+                }
             } else {
                 guard let data = try? fs.read(file) else {
                     log.warning("read failed: \(file.path, privacy: .public)")
+                    health.unreadable += 1
                     continue
                 }
-                guard let parsed = Self.parseSession(data) else {
+                let outcome = Self.parseSession(data)
+                sessionCache[file.path] = (st.modified, outcome)
+                switch outcome {
+                case .session(let parsed):
+                    session = parsed
+                case .malformed:
+                    log.warning("unparsable session file: \(file.path, privacy: .public)")
+                    health.malformed += 1
+                    continue
+                case .nonInteractive:
                     log.info("skipped session file: \(file.path, privacy: .public)")
-                    sessionCache[file.path] = (st.modified, nil)
+                    health.nonInteractive += 1
                     continue
                 }
-                session = parsed
-                sessionCache[file.path] = (st.modified, parsed)
             }
 
-            guard fs.processAlive(session.pid) else { continue }
+            guard fs.processAlive(session.pid) else {
+                health.deadPid += 1
+                continue
+            }
             guard !seenIds.contains(session.id) else { continue }
             seenIds.insert(session.id)
+            health.accepted += 1
 
             // transcript stat 은 틱당 세션마다 **한 번**만 한다. 제목과 알림 해제가 같이 쓴다.
             let transcript = transcriptStat(for: session, now: now)
@@ -130,7 +154,7 @@ public final class StateCollector: @unchecked Sendable {
         // 이번 틱에 실행 중이던 것만 남기지 않으면 프로세스 수명 내내 단조 증가한다.
         metaCache = metaCache.filter { seenMetaPaths.contains($0.key) }
         sessions.sort { ($0.name, $0.id) < ($1.name, $1.id) }
-        return Snapshot(sessions: sessions, takenAt: now)
+        return Snapshot(sessions: sessions, takenAt: now, health: health)
     }
 
     // MARK: - Sessions
@@ -144,14 +168,26 @@ public final class StateCollector: @unchecked Sendable {
         let kind: String?
     }
 
-    static func parseSession(_ data: Data) -> Session? {
-        guard let f = try? JSONDecoder().decode(SessionFile.self, from: data) else { return nil }
-        guard f.kind == "interactive" else { return nil }
-        return Session(
+    /// 세션 파일 하나를 읽은 결과. 실패를 nil 하나로 뭉개면 "스키마가 바뀌었다"와
+    /// "대화형이 아니라 건너뛴다"를 구분할 수 없다 — 전자만 사용자에게 알려야 한다.
+    enum SessionParse: Equatable {
+        case session(Session)
+        /// 우리가 아는 스키마로 디코딩되지 않았다.
+        case malformed
+        /// 디코딩은 됐는데 `kind` 가 `interactive` 가 아니다.
+        case nonInteractive
+    }
+
+    static func parseSession(_ data: Data) -> SessionParse {
+        guard let f = try? JSONDecoder().decode(SessionFile.self, from: data) else {
+            return .malformed
+        }
+        guard f.kind == "interactive" else { return .nonInteractive }
+        return .session(Session(
             id: f.sessionId, pid: f.pid, name: f.name, cwd: f.cwd,
             status: f.status == "busy" ? .busy : .idle,
             subagents: []
-        )
+        ))
     }
 
     /// 관찰된 규칙: `/` 와 `_` 를 `-` 로. 맞지 않으면 projectDir 가 glob 으로 폴백한다.

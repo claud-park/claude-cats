@@ -62,6 +62,7 @@ Gatekeeper 가 막는다. 배포하려면 Developer ID 인증서로 서명하고
 | 항목 | 하는 일 |
 | --- | --- |
 | `고양이 N마리 · 작업 중 N` | 읽기 전용 요약 |
+| `⚠️ 세션 파일 …` | 세션 파일을 못 읽었을 때만 나오는 경고 ([아래](#문제가-생겼을-때)) |
 | `일시정지` / `재개` | 폴링·그리기 정지 |
 | `지금 새로고침` | 즉시 한 번 폴링 |
 | `디스플레이` | 고양이를 그릴 화면 선택 |
@@ -209,6 +210,32 @@ interactive 세션마다 고양이 한 마리를 배치한다. busy 세션의
 `SceneConfig.bottomInset`(40pt)을 더해 `Scene.layout` 에 넘긴다. Dock 이 좌·우에 있거나
 자동 숨김이면 두 `minY` 가 같아 40pt 그대로다. Dock 크기·위치·자동 숨김을 바꾸면 macOS 가
 `didChangeScreenParameters` 를 보내고, 거기서 `refitToScreen()` 이 여백을 다시 잰다.
+
+## 문제가 생겼을 때
+
+이 앱은 Claude Code 의 **문서화되지 않은 내부 파일 구조**에 직접 기댄다 —
+`~/.claude/sessions/*.json` 의 `pid`/`sessionId`/`kind`/`status`/`cwd`/`name`,
+`~/.claude/projects/<cwd>/<sessionId>/subagents/*.jsonl` 의 mtime, transcript 끝의
+`ai-title` 줄. 전부 공개 API 가 아니라서 Claude Code 업데이트로 조용히 깨질 수 있다.
+
+그래서 매 틱 세션 파일을 몇 개 봤고 몇 개를 받아들였는지, 못 받아들인 건 왜인지
+(`unreadable` / `malformed` / `nonInteractive` / `deadPid`) 세서, 문제가 있을 때만
+메뉴바 요약 아래에 한 줄이 더 붙는다.
+
+| 메뉴 줄 | 뜻 | 볼 곳 |
+| --- | --- | --- |
+| (없음) | 정상 | — |
+| `⚠️ 세션 파일 N개를 읽지 못함 — Claude Code 구조가 바뀌었을 수 있음` | 파일은 N개 있는데 **하나도** 못 받아들였다. `sessions/*.json` 스키마가 바뀌었을 가능성이 크다 | `ls ~/.claude/sessions` 로 파일이 있는지, 그 JSON 에 `sessionId`·`kind`·`pid` 가 그대로 있는지 |
+| `⚠️ 세션 파일 M개 읽기 실패` | 일부는 읽었는데 M개는 못 읽었다(권한·경합·깨진 파일) | 아래 로그 |
+
+`kind` 가 `interactive` 가 아닌 파일과 프로세스가 이미 죽은 세션 파일은 정상이라
+경고에 세지 않는다 — 고양이가 0마리인 게 맞는 상황이다.
+
+자세한 경로는 통합 로그에 남는다:
+
+```bash
+log stream --predicate 'subsystem == "claude-cats"' --level info
+```
 
 ## 직접 그린 SVG 넣는 법
 
