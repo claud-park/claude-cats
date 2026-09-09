@@ -6,14 +6,16 @@ import Testing
         // rawValue 는 UserDefaults 저장값·소스/생성 파일 이름과 묶여 있다 — 바꾸면 안 된다.
         #expect(CatConcept.team.rawValue == "team")
         #expect(CatConcept.kenji.rawValue == "kenji")
-        #expect(CatConcept.allCases.count == 2)
+        #expect(CatConcept.monggle.rawValue == "monggle")
+        #expect(CatConcept.allCases.count == 3)
     }
 
     @Test func titlesAreTheUserFacingNames() {
-        // 내부 식별자(team/kenji)와 다른, 메뉴·UI 표기.
+        // 내부 식별자(team/kenji/monggle)와 다른, 메뉴·UI 표기.
         #expect(CatConcept.team.title == "푹신캣")
         #expect(CatConcept.kenji.title == "동글캣")
-        #expect(Set(CatConcept.allCases.map(\.title)).count == 2)
+        #expect(CatConcept.monggle.title == "몽글개")
+        #expect(Set(CatConcept.allCases.map(\.title)).count == 3)
     }
 
     // MARK: - stored
@@ -35,7 +37,7 @@ import Testing
     @Test func menuEntriesMarkExactlyOne() {
         for concept in CatConcept.allCases {
             let entries = CatConcept.menuEntries(selected: concept)
-            #expect(entries.count == 2)
+            #expect(entries.count == 3)
             #expect(entries.filter(\.isSelected).count == 1)
             #expect(entries.first(where: \.isSelected)?.concept == concept)
         }

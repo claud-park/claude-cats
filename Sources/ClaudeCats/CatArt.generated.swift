@@ -77,11 +77,28 @@ enum CatArt {
         recolorable: true
     )
 
+    static let monggle = CatArtSet(
+        sittingBody: monggleSittingBody,
+        sittingTailA: [],
+        sittingTailB: [],
+        sleepingBody: monggleSleepingBody,
+        alertBody: monggleSittingBody,
+        alertTailA: [],
+        alertTailB: [],
+        sittingTop: monggleSittingTop,
+        sleepingTop: monggleSleepingTop,
+        alertTop: monggleSittingTop,
+        sittingTailAboveBody: false,
+        alertTailAboveBody: false,
+        recolorable: true
+    )
+
     /// 고양이 종류에 맞는 아트 묶음. 메뉴바 `고양이 종류` 선택이 이 값을 고른다.
     static func set(_ concept: CatConcept) -> CatArtSet {
         switch concept {
         case .team: return team
         case .kenji: return kenji
+        case .monggle: return monggle
         }
     }
 }

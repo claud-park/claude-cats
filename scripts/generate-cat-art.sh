@@ -46,6 +46,23 @@ for POSE in sitting sleeping; do
   fi
 done
 
+# 몽글개(monggle). 켄지와 같이 꼬리 프레임도 alert 원본도 없어 두 포즈 다 정적으로 import 한다.
+#
+# 색: 몽글개도 세션 팔레트로 색이 갈린다(recolorable). 가장 넓은 몸통색과 그 밝은 톤을 치환한다.
+#   #847D7D (가장 큰 영역, 몸통 주색)  → #FUR
+#   #9C9494 (더 밝은 털 톤)            → #FURLIGHT
+# 나머지(#CAC2C0 밝은 회색, #E3C9AE 얼굴/발 크림, #3F322E 눈·코 진갈색)는 .fixed 로 둔다.
+# FURDARK 에 해당하는 색은 원본에 없어 플래그를 주지 않는다.
+for POSE in sitting sleeping; do
+  SRC="Design/cats/source/monggle-$POSE-figma.svg"
+  if [ -f "$SRC" ]; then
+    python3 scripts/import-cat-svg.py "$SRC" \
+      --pose sleeping \
+      --out "Design/cats/monggle-$POSE.svg" \
+      --fur "#847D7D" --fur-light "#9C9494"
+  fi
+done
+
 OUT_DIR="Sources/ClaudeCats"
 
 # 입력은 <컨셉:포즈=경로>. 컨셉·포즈마다 파일 하나가 나온다(CatArt.<컨셉>.<포즈>.generated.swift).
@@ -55,6 +72,9 @@ INPUTS="team:sitting=Design/cats/sitting.svg team:sleeping=Design/cats/sleeping.
 # 켄지는 원본이 있을 때만 넣는다(꼬리·alert 없음 → CatArtSet 이 빈 꼬리·sitting 폴백으로 채운다).
 [ -f Design/cats/kenji-sitting.svg ] && INPUTS="$INPUTS kenji:sitting=Design/cats/kenji-sitting.svg"
 [ -f Design/cats/kenji-sleeping.svg ] && INPUTS="$INPUTS kenji:sleeping=Design/cats/kenji-sleeping.svg"
+# 몽글개도 원본이 있을 때만(꼬리·alert 없음 → CatArtSet 이 빈 꼬리·sitting 폴백으로 채운다).
+[ -f Design/cats/monggle-sitting.svg ] && INPUTS="$INPUTS monggle:sitting=Design/cats/monggle-sitting.svg"
+[ -f Design/cats/monggle-sleeping.svg ] && INPUTS="$INPUTS monggle:sleeping=Design/cats/monggle-sleeping.svg"
 
 # 생성기가 파일을 직접 쓰고, 더는 안 쓰는 예전 생성물은 스스로 지운다.
 # shellcheck disable=SC2086
