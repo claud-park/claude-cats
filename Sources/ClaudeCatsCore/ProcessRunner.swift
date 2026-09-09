@@ -114,18 +114,20 @@ public enum ProcessRunner {
         readSource.setCancelHandler { close(readFD) }
         readSource.resume()
 
-        // 자식 **종료**에 건다(파이프 EOF 가 아니라). 시간이 넘으면 그룹째 SIGTERM.
+        // 자식 **종료**에 건다(파이프 EOF 가 아니라). 시간이 넘으면 그룹째 SIGTERM →(안 죽으면) SIGKILL.
         var timedOut = false
         if exited.wait(timeout: .now() + timeout) == .timedOut {
-            // 리더가 된 게 확인될 때만 그룹째 내린다. setpgid 가 실패했다면 자식은 아직 우리
-            // 그룹에 있고, 그때 kill(-그룹) 은 앱 자신을 죽인다.
-            if getpgid(childPid) == childPid {
-                kill(-childPid, SIGTERM)
-            } else {
-                process.terminate()
-            }
             timedOut = true
-            exited.wait() // SIGTERM 뒤 곧 끝난다.
+            // 리더가 된 게 **확인될 때만** 그룹째(손자까지) 내린다. setpgid 가 실패했다면 자식은
+            // 아직 우리 그룹에 있고, 그때 kill(-그룹) 은 앱 자신을 죽인다 — 그 경우 자식만 노린다.
+            let isLeader = getpgid(childPid) == childPid
+            if isLeader { kill(-childPid, SIGTERM) } else { process.terminate() }
+            // TCC 에 막힌 open()/getcwd() 는 SIGTERM 으로 안 깨어날 수 있다. 잠깐 기다렸다 그래도
+            // 안 죽으면 SIGKILL 로 확실히 내린다 — "몇 초 안에 분명한 실패" 약속을 지킨다.
+            if exited.wait(timeout: .now() + 2) == .timedOut {
+                if isLeader { kill(-childPid, SIGKILL) } else { kill(childPid, SIGKILL) }
+                exited.wait()
+            }
         }
 
         // 자식은 끝났다. 파이프에 남아 있던 출력을 한 번 더 훑어 담고 소스를 닫는다.

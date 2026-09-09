@@ -48,6 +48,20 @@ import Testing
         #expect(elapsed < 5.0, "타임아웃이 제때 안 걸렸다: \(elapsed)s")
     }
 
+    /// SIGTERM 을 무시하는 자식(TCC 에 막힌 open() 처럼 안 깨어나는 경우의 대역)도 짧은 유예 뒤
+    /// SIGKILL 로 반드시 내려간다 — "몇 초 안에 분명한 실패" 약속이 무한 대기로 무너지지 않게.
+    @Test func escalatesToKillWhenChildIgnoresSigterm() {
+        let start = Date()
+        let r = ProcessRunner.run(
+            executable: "/bin/sh", arguments: ["-c", "trap '' TERM; sleep 60"],
+            cwd: nil, environment: Self.env, timeout: 1
+        )
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(r.timedOut == true)
+        // timeout(1) + SIGTERM 유예(2) + 약간 → 넉넉히 6초 안에 죽어야 한다.
+        #expect(elapsed < 6.0, "SIGTERM 무시 자식이 SIGKILL 로 안 내려갔다: \(elapsed)s")
+    }
+
     @Test func streamsOutputLive() {
         let box = LockedText()
         let r = ProcessRunner.run(

@@ -172,7 +172,12 @@ final class Updater {
         let reach = Shell.run("git", ["-C", repo, "rev-parse", "--is-inside-work-tree"],
                               cwd: repo, timeout: 5)
         if reach.status != 0 {
-            if reach.timedOut {
+            // 파일 접근 권한이 막히는 두 가지 모습: (1) 동의 프롬프트를 기다리며 멈춤 → timedOut,
+            // (2) 커널이 곧바로 거부 → git 이 "Operation not permitted"(EPERM) 로 빨리 끝남.
+            // 둘 다 같은 원인이라 같은 안내로 보낸다("네트워크" 오해를 남기지 않게).
+            let deniedByFileAccess = reach.timedOut
+                || reach.output.lowercased().contains("operation not permitted")
+            if deniedByFileAccess {
                 appendLog("저장소 로컬 접근이 막혔다(파일 접근 권한으로 본다)\n\(reach.output)")
                 return .offline("소스 저장소에 접근하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > "
                     + "파일 및 폴더(또는 전체 디스크 접근)에서 ClaudeCats 를 허용한 뒤 다시 확인해 주세요.")
