@@ -16,8 +16,26 @@ public enum SettingsFile {
     }
 
     /// 심볼릭 링크를 따라간 실제 경로.
+    ///
+    /// `resolvingSymlinksInPath()` 는 **대상이 없는 링크**(아직 안 만든 dotfiles 파일, 다른
+    /// 머신에서 만든 링크)를 만나면 링크 경로를 그대로 돌려준다. 그 상태로 쓰면 링크를
+    /// 지우고 그 자리에 일반 파일을 놓게 된다 — 링크를 죽이지 않으려면 직접 따라가야 한다.
     public static func resolve(_ url: URL) -> URL {
-        url.resolvingSymlinksInPath()
+        let resolved = url.resolvingSymlinksInPath()
+        guard resolved.path == url.path, isSymbolicLink(url) else { return resolved }
+        guard let destination = try? FileManager.default
+            .destinationOfSymbolicLink(atPath: url.path) else { return resolved }
+        // 상대 경로 링크는 링크가 있는 디렉터리 기준이다.
+        let target = destination.hasPrefix("/")
+            ? URL(fileURLWithPath: destination)
+            : url.deletingLastPathComponent().appendingPathComponent(destination)
+        // 대상이 또 링크일 수 있다. 한 번 더 풀어 본다(순환은 standardized 로 끊는다).
+        return target.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
+    private static func isSymbolicLink(_ url: URL) -> Bool {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes?[.type] as? FileAttributeType == .typeSymbolicLink
     }
 
     /// 파일이 없거나 비어 있으면 빈 설정. 있는데 JSON 객체가 아니면 던진다.

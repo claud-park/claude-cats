@@ -105,13 +105,15 @@ public final class StateCollector: @unchecked Sendable {
 
             // transcript stat 은 틱당 세션마다 **한 번**만 한다. 제목과 알림 해제가 같이 쓴다.
             let transcript = transcriptStat(for: session, now: now)
-            session.alert = resolveAlert(for: session, now: now, transcript: transcript?.stat)
             // mtime 휴리스틱은 busy 세션만 훑는다. 훅이 세어 준 서브에이전트는 idle 세션에도
             // 붙인다 — 프롬프트 앞에서 쉬는 동안 백그라운드 에이전트가 돌 수 있다.
             let scanned = session.status == .busy
                 ? activeSubagents(for: session, now: now, seenMetaPaths: &seenMetaPaths)
                 : []
             session.subagents = mergedSubagents(for: session.id, now: now, scanned: scanned)
+            // 알림 해제는 서브에이전트 활동을 볼 수도 있어서 위 스캔 뒤에 판정한다.
+            session.alert = resolveAlert(for: session, now: now,
+                                         transcript: transcript?.stat, scanned: scanned)
             session.title = title(for: session, now: now, transcript: transcript)
             sessions.append(session)
         }
@@ -283,19 +285,15 @@ public final class StateCollector: @unchecked Sendable {
             return lhs.url.lastPathComponent < rhs.url.lastPathComponent
         }
 
-        for entry in ordered.prefix(Self.eventsPerTick) {
+        // 이미 적용했는데 못 지운 파일은 예산에서 뺀다. 안 그러면 지워지지 않는 파일 200개가
+        // 예산을 통째로 먹어 새 이벤트가 영영 못 들어온다.
+        let fresh = ordered.filter { !processedEvents.contains($0.url.path) }
+        for entry in fresh.prefix(Self.eventsPerTick) {
             let path = entry.url.path
-            // 지우기에 실패한 파일은 다시 만난다. 내용을 두 번 적용하지 않으려면 기억해야 한다.
-            let alreadyApplied = processedEvents.contains(path)
+            // 지우기에 실패하면 다시 만난다. 내용을 두 번 적용하지 않으려면 기억해야 한다.
             defer {
-                do {
-                    try fs.remove(entry.url)
-                    forgetProcessedEvent(path)
-                } catch {
-                    rememberProcessedEvent(path)
-                }
+                do { try fs.remove(entry.url) } catch { rememberProcessedEvent(path) }
             }
-            guard !alreadyApplied else { continue }
             guard let data = try? fs.read(entry.url),
                   let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
                 log.info("dropped hook event: \(entry.url.lastPathComponent, privacy: .public)")
@@ -305,6 +303,15 @@ public final class StateCollector: @unchecked Sendable {
             // 폴링 간격(최대 3초)만큼, 앱이 꺼져 있었다면 그보다 훨씬 크게 벌어진다.
             apply(event, at: entry.modified)
         }
+
+        // 못 지운 파일은 읽지 않고 지우기만 다시 시도한다(예산과는 별도, 같은 상한).
+        let stale = ordered.filter { processedEvents.contains($0.url.path) }
+        for entry in stale.prefix(Self.eventsPerTick) {
+            if (try? fs.remove(entry.url)) != nil { forgetProcessedEvent(entry.url.path) }
+        }
+        // 이번 목록에 없는 경로는 이미 사라진 것이다 — 기억에 남겨 둘 이유가 없다.
+        let present = Set(ordered.map(\.url.path))
+        for path in processedEvents where !present.contains(path) { forgetProcessedEvent(path) }
     }
 
     /// `at` 은 훅이 터진 시각(이벤트 파일 mtime)이다. 알림 유예·TTL 과 서브에이전트 나이가
@@ -379,7 +386,9 @@ public final class StateCollector: @unchecked Sendable {
     ///    뜨는 동안 세션이 idle 로 넘어가는 게 정상이라 그걸로 지우면 알림이 바로 사라진다.
     /// 4. 세션 소멸 (틱 끝 프루닝)
     /// 5. TTL (훅이 죽어 2·3 이 영영 안 올 때의 안전망)
-    private func resolveAlert(for session: Session, now: Date, transcript: FileStat?) -> Alert? {
+    private func resolveAlert(
+        for session: Session, now: Date, transcript: FileStat?, scanned: [Subagent]
+    ) -> Alert? {
         guard let alert = alerts[session.id] else { return nil }
         let previousStatus = alertStatus[session.id]
         alertStatus[session.id] = session.status
@@ -388,8 +397,12 @@ public final class StateCollector: @unchecked Sendable {
             clearAlert(session.id)
             return nil
         }
-        if let modified = transcript?.modified,
-           modified > alert.since.addingTimeInterval(alertClearGrace) {
+        // 기다리는 게 서브에이전트면 본 대화 transcript 가 아니라 **그 에이전트의** transcript 를
+        // 봐야 한다. 본 대화는 에이전트를 기다리는 동안에도 계속 쓴다.
+        let activity = alert.kind == .agentNeedsInput
+            ? agentActivity(for: session, now: now, scanned: scanned)
+            : transcript?.modified
+        if let activity, activity > alert.since.addingTimeInterval(alertClearGrace) {
             clearAlert(session.id)
             return nil
         }
@@ -398,6 +411,27 @@ public final class StateCollector: @unchecked Sendable {
             return nil
         }
         return alert
+    }
+
+    /// 이 세션의 서브에이전트가 마지막으로 뭔가 쓴 시각. `agent_needs_input` 해제 판정에만 쓴다.
+    ///
+    /// busy 세션이면 스캔이 이미 재 놓은 값(`Subagent.lastActivity` = 파일 mtime)을 그대로
+    /// 쓴다 — stat 을 다시 하지 않는다. idle 세션은 스캔을 안 하므로 **훅이 세고 있는**
+    /// 에이전트의 transcript 만 골라 stat 한다(보통 0~3개).
+    private func agentActivity(for session: Session, now: Date, scanned: [Subagent]) -> Date? {
+        var newest = scanned.map(\.lastActivity).max()
+        let hooked = hookAgents[session.id] ?? [:]
+        let alreadyScanned = Set(scanned.map(\.id))
+        let missing = hooked.keys.filter { !alreadyScanned.contains($0) }
+        guard !missing.isEmpty, let root = projectRoot(for: session, now: now) else { return newest }
+
+        let subDir = root.appendingPathComponent(session.id).appendingPathComponent("subagents")
+        for agentId in missing {
+            let url = subDir.appendingPathComponent("agent-\(agentId).jsonl")
+            guard let stat = try? fs.stat(url) else { continue }
+            newest = max(newest ?? stat.modified, stat.modified)
+        }
+        return newest
     }
 
     /// mtime 휴리스틱과 훅이 센 서브에이전트의 합집합에서, 이미 Stop 을 받은 id 를 뺀다.

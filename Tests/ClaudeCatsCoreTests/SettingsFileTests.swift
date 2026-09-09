@@ -56,6 +56,38 @@ import Foundation
         }
     }
 
+    /// 대상이 아직 없는 링크(dotfiles 를 아직 안 만들었거나 다른 머신에서 만든 링크).
+    /// `resolvingSymlinksInPath()` 는 이때 링크 경로를 그대로 돌려주므로, 그냥 쓰면
+    /// 링크를 지우고 그 자리에 일반 파일을 놓게 된다.
+    @Test func writingThroughADanglingSymlinkCreatesTheTargetAndKeepsTheLink() throws {
+        try withTempDir { dir in
+            let target = dir.appendingPathComponent("not-created-yet.json")
+            let link = dir.appendingPathComponent("settings.json")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+            try SettingsFile.write(["model": "opus"], to: link, backupTo: nil)
+
+            let type = try FileManager.default.attributesOfItem(atPath: link.path)[.type] as? FileAttributeType
+            #expect(type == .typeSymbolicLink)
+            #expect(FileManager.default.fileExists(atPath: target.path))
+            #expect(try SettingsFile.read(target)["model"] as? String == "opus")
+        }
+    }
+
+    /// 상대 경로 링크는 링크가 있는 디렉터리 기준으로 푼다. 대상 디렉터리도 없으면 만든다.
+    @Test func relativeDanglingSymlinkResolvesAgainstTheLinkDirectory() throws {
+        try withTempDir { dir in
+            let link = dir.appendingPathComponent("settings.json")
+            try FileManager.default.createSymbolicLink(atPath: link.path,
+                                                       withDestinationPath: "dotfiles/claude.json")
+            try SettingsFile.write(["a": 1], to: link, backupTo: nil)
+
+            let target = dir.appendingPathComponent("dotfiles").appendingPathComponent("claude.json")
+            #expect(FileManager.default.fileExists(atPath: target.path))
+            #expect(try SettingsFile.read(link)["a"] as? Int == 1)
+        }
+    }
+
     @Test func writePreservesTheOriginalPermissions() throws {
         try withTempDir { dir in
             let url = dir.appendingPathComponent("settings.json")

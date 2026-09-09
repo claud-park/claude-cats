@@ -105,6 +105,31 @@ import Foundation
         #expect(fs.removed.count == total)          // 나머지는 다음 틱에
     }
 
+    /// 지워지지 않는 파일이 예산을 통째로 먹으면 새 이벤트가 영영 못 들어온다.
+    /// 이미 적용한 파일은 예산에서 빼야 한다.
+    @Test func undeletableEventsDoNotStarveTheBudget() {
+        let fs = makeFS()
+        var stuck: Set<String> = []
+        for i in 0..<StateCollector.eventsPerTick {
+            let path = Fixtures.eventPath(String(format: "stuck-%05d", i))
+            fs.add(path, Fixtures.hookEvent("UserPromptSubmit"),
+                   modified: now.addingTimeInterval(Double(i)))
+            stuck.insert(path)
+        }
+        fs.failRemoves = stuck
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        _ = c.collect(now: now)
+        #expect(c.processedEvents.count == StateCollector.eventsPerTick)
+
+        // 예산을 꽉 채운 채로 새 이벤트가 하나 온다 — 같은 틱에 들어와야 한다.
+        fs.add(Fixtures.eventPath("zzz-new"),
+               Fixtures.notification(type: "permission_prompt", message: "fresh"),
+               modified: now.addingTimeInterval(1000))
+        let alert = c.collect(now: now.addingTimeInterval(1001)).sessions[0].alert
+        #expect(alert?.message == "fresh")
+        #expect(fs.removed == [Fixtures.eventPath("zzz-new")])
+    }
+
     /// 지우기에 실패한 파일은 매 틱 다시 만난다. 내용을 두 번 적용하면 안 된다.
     @Test func undeletableEventIsNotAppliedTwice() {
         let fs = makeFS()
@@ -286,6 +311,58 @@ import Foundation
         setStatus(fs, "idle", at: now.addingTimeInterval(3))
         #expect(c.collect(now: now.addingTimeInterval(3)).sessions[0].alert?.kind == .agentNeedsInput)
         #expect(c.collect(now: now.addingTimeInterval(60)).sessions[0].alert?.kind == .agentNeedsInput)
+    }
+
+    /// `agent_needs_input` 은 **본 대화** transcript 로 풀리면 안 된다 — 에이전트를 기다리는
+    /// 동안에도 본 대화는 계속 기록을 쓴다.
+    @Test func agentNeedsInputIgnoresTheMainTranscript() {
+        let fs = makeFS(status: "busy")
+        let transcript = Fixtures.transcriptPath(encodedCwd: encoded, sessionId: "sess")
+        fs.add(transcript, Fixtures.titleLine("t") + "\n", modified: now.addingTimeInterval(-5))
+        addEvent(fs, "1", Fixtures.notification(type: "agent_needs_input", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+
+        // 본 대화가 유예를 한참 넘겨 써도 알림은 그대로다.
+        fs.touch(transcript, modified: now.addingTimeInterval(60))
+        #expect(c.collect(now: now.addingTimeInterval(61)).sessions[0].alert?.kind == .agentNeedsInput)
+    }
+
+    /// 대신 **에이전트** transcript 가 유예를 넘겨 자라면 답을 받은 것이다.
+    @Test func agentNeedsInputClearsWhenTheSubagentTranscriptGrows() {
+        let fs = makeFS(status: "busy")
+        let dir = Fixtures.subagentDir(encodedCwd: encoded, sessionId: "sess")
+        fs.add("\(dir)/agent-a1.jsonl", "{}\n", modified: now.addingTimeInterval(-1))
+        addEvent(fs, "1", Fixtures.notification(type: "agent_needs_input", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+
+        // 유예 안이면 아직 기다리는 중.
+        fs.touch("\(dir)/agent-a1.jsonl", modified: now.addingTimeInterval(3))
+        #expect(c.collect(now: now.addingTimeInterval(4)).sessions[0].alert != nil)
+        // 유예를 넘겼으면 에이전트가 다시 움직인 것이다.
+        fs.touch("\(dir)/agent-a1.jsonl", modified: now.addingTimeInterval(7))
+        #expect(c.collect(now: now.addingTimeInterval(8)).sessions[0].alert == nil)
+    }
+
+    /// idle 세션은 서브에이전트 디렉터리를 훑지 않는다. 훅이 세고 있는 에이전트의
+    /// transcript 만 골라 본다.
+    @Test func idleSessionChecksOnlyHookTrackedAgentTranscripts() {
+        let fs = makeFS(status: "idle")
+        let dir = Fixtures.subagentDir(encodedCwd: encoded, sessionId: "sess")
+        fs.add("\(dir)/agent-hooked.jsonl", "{}\n", modified: now.addingTimeInterval(-1))
+        fs.add("\(dir)/agent-stranger.jsonl", "{}\n", modified: now.addingTimeInterval(-1))
+        addEvent(fs, "1", Fixtures.subagentEvent("SubagentStart", agentId: "hooked"))
+        addEvent(fs, "2", Fixtures.notification(type: "agent_needs_input", message: "x"))
+        let c = StateCollector(fileSystem: fs, claudeDir: Fixtures.claudeDir)
+        #expect(c.collect(now: now).sessions[0].alert != nil)
+
+        // 훅이 모르는 에이전트가 써도 그건 우리 관심사가 아니다.
+        fs.touch("\(dir)/agent-stranger.jsonl", modified: now.addingTimeInterval(30))
+        #expect(c.collect(now: now.addingTimeInterval(31)).sessions[0].alert != nil)
+        // 훅이 세고 있는 에이전트가 쓰면 해제한다.
+        fs.touch("\(dir)/agent-hooked.jsonl", modified: now.addingTimeInterval(40))
+        #expect(c.collect(now: now.addingTimeInterval(41)).sessions[0].alert == nil)
     }
 
     @Test func alertExpiresAfterTTL() {

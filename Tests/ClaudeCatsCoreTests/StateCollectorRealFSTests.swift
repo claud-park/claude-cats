@@ -43,6 +43,13 @@ import Foundation
         }
     }
 
+    /// 파일 mtime 은 `Date` → `setAttributes` → `stat` 을 돌면서 나노초가 반올림된다.
+    /// 파일시스템을 건넌 시각 비교는 반드시 허용 오차를 둔다.
+    func near(_ lhs: Date?, _ rhs: Date, tolerance: TimeInterval = 0.001) -> Bool {
+        guard let lhs else { return false }
+        return abs(lhs.timeIntervalSince(rhs)) < tolerance
+    }
+
     func eventCount(_ root: URL) throws -> Int {
         let dir = root.appendingPathComponent("claude-cats").appendingPathComponent("events")
         return try FileManager.default.contentsOfDirectory(atPath: dir.path).count
@@ -69,7 +76,9 @@ import Foundation
             let alerted = collector.collect(now: Date()).sessions
             #expect(alerted.count == 1)
             #expect(alerted[0].alert?.kind == .permission)
-            #expect(alerted[0].alert?.since == fired)       // 틱 시각이 아니라 훅이 터진 때
+            // 틱 시각이 아니라 훅이 터진 때. 파일시스템을 한 바퀴 돌면(Date →
+            // setAttributes → stat) 나노초가 반올림되므로 정확히 같기를 기대하면 안 된다.
+            #expect(near(alerted[0].alert?.since, fired))
             #expect(try eventCount(root) == 0)              // RealFileSystem.remove 가 실제로 지웠다
 
             // 우리가 만든 transcript 에 한 줄 덧붙인다(= 그 턴이 기록을 마저 쓴다).
