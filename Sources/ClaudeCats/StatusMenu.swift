@@ -165,6 +165,9 @@ final class StatusMenu: NSObject {
     /// 이 앱은 `~/.claude` 의 문서화되지 않은 구조에 기대므로 Claude Code 업데이트로 조용히
     /// 깨질 수 있다. 그때 "정말 세션이 없다"와 "파일은 있는데 못 읽었다"가 똑같이
     /// "고양이 0마리"로 보이면 사용자가 알아차릴 방법이 없다.
+    ///
+    /// 반대로 죽은 pid·비대화형만 있어서 0마리인 건 정상이라 아무것도 띄우지 않는다 —
+    /// 늘 떠 있는 경고는 아무도 안 읽는다.
     static func healthWarning(_ health: CollectorHealth) -> String? {
         if health.readNothing {
             return "⚠️ 세션 파일 \(health.sessionFiles)개를 읽지 못함 — Claude Code 구조가 바뀌었을 수 있음"

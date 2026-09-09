@@ -29,6 +29,35 @@ import Foundation
                                           malformed: 1, nonInteractive: 1, deadPid: 1))
     }
 
+    /// 전부 죽은 pid·비대화형이라 0마리인 건 **정상**이다. 실패가 하나도 없으므로
+    /// 구조 변경을 의심할 근거가 없고, 그때 경고를 띄우면 늑대소년이 된다.
+    @Test func allDroppedForNormalReasonsIsNotAWarning() {
+        let fs = FakeFileSystem()
+        fs.add(Fixtures.sessionPath(pid: 10),
+               Fixtures.sessionJSON(pid: 10, id: "s1", name: "dead", cwd: "/p/a"), modified: now)
+        fs.add(Fixtures.sessionPath(pid: 11),
+               Fixtures.sessionJSON(pid: 11, id: "s2", name: "bg", cwd: "/p/b", kind: "background"),
+               modified: now)
+        fs.alivePids = []
+
+        let snap = makeCollector(fs).collect(now: now)
+        #expect(snap.sessions.isEmpty)
+        #expect(snap.health == CollectorHealth(sessionFiles: 2, accepted: 0,
+                                               nonInteractive: 1, deadPid: 1))
+        #expect(!snap.health.readNothing)
+        #expect(snap.health.failures == 0)
+    }
+
+    /// 실패가 하나라도 섞여야 "구조가 바뀌었을 수 있음" 자리가 된다.
+    @Test func readNothingNeedsAtLeastOneFailure() {
+        let normalOnly = CollectorHealth(sessionFiles: 3, accepted: 0,
+                                         nonInteractive: 1, deadPid: 2)
+        let withFailure = CollectorHealth(sessionFiles: 3, accepted: 0,
+                                          malformed: 1, deadPid: 2)
+        #expect(!normalOnly.readNothing)
+        #expect(withFailure.readNothing)
+    }
+
     @Test func healthyRunHasNoFailures() {
         let fs = FakeFileSystem()
         fs.add(Fixtures.sessionPath(pid: 10),

@@ -58,12 +58,18 @@ guard FileManager.default.fileExists(atPath: source.path) else {
 
 // MARK: - 최신이면 건너뛴다 (멱등)
 
-/// 원본 SVG 와 이 스크립트보다 결과물이 새 것이면 다시 만들지 않는다.
+/// 입력이 셋이다: 원본 SVG, 팔레트 정본(generate-cat-art.sh — 여기 색을 바꾸면 아이콘도
+/// 바뀌어야 한다), 그리고 이 스크립트. 셋 다 결과물보다 낡았으면 다시 만들지 않는다.
 func isUpToDate() -> Bool {
     let fm = FileManager.default
     guard let out = try? fm.attributesOfItem(atPath: output.path)[.modificationDate] as? Date
     else { return false }
-    for input in [source, URL(fileURLWithPath: CommandLine.arguments[0])] {
+    let inputs = [
+        source,
+        repoRoot.appendingPathComponent("scripts/generate-cat-art.sh"),
+        URL(fileURLWithPath: CommandLine.arguments[0]),
+    ]
+    for input in inputs {
         guard let stamp = try? fm.attributesOfItem(atPath: input.path)[.modificationDate] as? Date
         else { return false }
         if stamp > out { return false }
@@ -182,8 +188,25 @@ for variant in variants {
 
 // MARK: - iconutil
 
+/// `command -v iconutil` 과 같은 규칙 — PATH 를 앞에서부터 훑어 실행 가능한 첫 항목.
+/// 경로를 박아 두면 Xcode 툴체인이나 다른 SDK 의 iconutil 을 쓰는 환경을 무시하게 된다.
+func findIconutil() -> URL? {
+    let fm = FileManager.default
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+    for directory in path.split(separator: ":", omittingEmptySubsequences: true) {
+        let candidate = URL(fileURLWithPath: String(directory))
+            .appendingPathComponent("iconutil")
+        if fm.isExecutableFile(atPath: candidate.path) { return candidate }
+    }
+    return nil
+}
+
+guard let iconutilURL = findIconutil() else {
+    fail("iconutil 을 PATH 에서 못 찾았다")
+}
+
 let iconutil = Process()
-iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+iconutil.executableURL = iconutilURL
 iconutil.arguments = ["-c", "icns", iconset.path, "-o", output.path]
 do { try iconutil.run() } catch {
     fail("iconutil 실행 실패: \(error.localizedDescription)")
