@@ -12,11 +12,21 @@ busy 세션은 앉은 자세(꼬리가 1초마다 흔들린다), idle 세션은 
 ```bash
 swift build               # 빌드
 .build/debug/ClaudeCats   # 실행 (창 없이 바탕화면에 그린다)
-swift test                # 테스트
+./scripts/test.sh         # 테스트 (Xcode 없이 CLT 만 있어도 돈다 — 아래 각주)
 
 ./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성
 open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 ```
+
+> **`swift test` 대신 `./scripts/test.sh` 를 쓰는 이유** — Xcode 없이 Command Line Tools
+> 만 깔린 맥에서는 `swift test` 가 `no such module 'Testing'` →
+> `Library not loaded: @rpath/Testing.framework/...` 로 실패한다. CLT 안에서
+> `Testing.framework` 와 `lib_TestingInterop.dylib` 가 런타임 검색 경로에 없는 서로 다른
+> 디렉터리에 있기 때문이고, `swiftpm-testing-helper` 가 SIP 보호 바이너리라
+> `DYLD_FRAMEWORK_PATH` 로는 못 고친다. `scripts/test.sh` 는 `xcode-select -p` 가
+> CommandLineTools 를 가리킬 때만 rpath 두 개를 붙여 주고, Xcode 가 있으면 그냥
+> `swift test` 를 부른다. (`Package.swift` 에 `unsafeFlags` 로 넣지 않는 이유는
+> 스크립트 주석에 적어 뒀다.)
 
 ## 메뉴바 항목
 
