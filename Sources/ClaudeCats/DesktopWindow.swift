@@ -33,7 +33,7 @@ final class DesktopWindow {
     /// 지금 창 레벨. 화면을 다시 맞춰도 유지된다.
     private var placement: WindowPlacement
 
-    /// 지금 그리는 고양이 종류의 아트. 메뉴 `고양이 종류` 로 바뀌면 모든 고양이를 다시 만든다.
+    /// 지금 그리는 동물 종류의 아트. 메뉴 `동물 종류` 로 바뀌면 모든 고양이를 다시 만든다.
     private var artSet: CatArtSet
 
     /// 선택한 이름의 디스플레이. 이름이 안 맞거나(뽑아버린 모니터) 없으면 메인으로 폴백한다.
@@ -107,7 +107,7 @@ final class DesktopWindow {
         Self.apply(new, to: window)
     }
 
-    /// 메뉴에서 `고양이 종류` 를 고르면 호출된다. 창·레이아웃은 그대로 두고 각 고양이의 아트만
+    /// 메뉴에서 `동물 종류` 를 고르면 호출된다. 창·레이아웃은 그대로 두고 각 고양이의 아트만
     /// 갈아끼운다(포즈 변경과 같은 경로) — 위치가 안 바뀌므로 깜빡이지 않는다.
     func setConcept(_ concept: CatConcept) {
         artSet = CatArt.set(concept)

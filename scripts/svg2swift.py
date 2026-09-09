@@ -1002,7 +1002,7 @@ struct CatArtLayer: @unchecked Sendable {
     let opacity: Float
 }
 
-/// 한 컨셉(고양이 종류)의 네 포즈 아트. `recolorable` 이 false 면 팔레트 색을 입히지 않는다
+/// 한 컨셉(동물 종류)의 네 포즈 아트. `recolorable` 이 false 면 팔레트 색을 입히지 않는다
 /// (켄지/동글캣처럼 색이 고정인 고양이). 꼬리 프레임이 없는 컨셉은 Tail 배열이 비고
 /// `sittingTailAboveBody` 가 false 다.
 struct CatArtSet: Sendable {
@@ -1096,7 +1096,7 @@ def concept_set(concept, poses):
 def concept_switch(concept_order):
     """`CatArt.set(_:)` — CatConcept → CatArtSet 스위치."""
     lines = [
-        "    /// 고양이 종류에 맞는 아트 묶음. 메뉴바 `고양이 종류` 선택이 이 값을 고른다.",
+        "    /// 동물 종류에 맞는 아트 묶음. 메뉴바 `동물 종류` 선택이 이 값을 고른다.",
         "    static func set(_ concept: CatConcept) -> CatArtSet {",
         "        switch concept {",
     ]

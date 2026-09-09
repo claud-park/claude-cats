@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let preferredDisplayKey = "preferredDisplayName"
     /// 창 레벨 선택(`WindowPlacement` raw value). 키가 없으면 `.desktop`.
     private static let windowPlacementKey = "windowPlacement"
-    /// 고양이 종류 선택(`CatConcept` raw value). 키가 없으면 `.team`(푹신캣).
+    /// 동물 종류 선택(`CatConcept` raw value). 키가 없으면 `.team`(푹신캣).
     private static let catConceptKey = "catConcept"
     /// Dock 아이콘 표시 여부. 키가 없으면 false(원래대로 메뉴바 전용 accessory).
     /// 노치 MacBook 등 메뉴바가 꽉 차 아이콘이 숨는 환경에서 켜면 Dock 으로 조작한다.
