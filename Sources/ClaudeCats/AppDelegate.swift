@@ -5,6 +5,8 @@ import ClaudeCatsCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 고양이를 그릴 디스플레이 이름. 키가 없으면 자동(메인).
     private static let preferredDisplayKey = "preferredDisplayName"
+    /// 창 레벨 선택(`WindowPlacement` raw value). 키가 없으면 `.desktop`.
+    private static let windowPlacementKey = "windowPlacement"
 
     private var window: DesktopWindow!
     private var controller: AppController!
@@ -19,8 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let defaults = UserDefaults.standard
         let preferredDisplay = defaults.string(forKey: Self.preferredDisplayKey)
+        let placement = WindowPlacement.stored(defaults.string(forKey: Self.windowPlacementKey))
         // 첫 렌더 전에 화면을 정해야 Scene 이 그 화면 크기로 배치된다.
-        window = DesktopWindow(preferredDisplayName: preferredDisplay)
+        window = DesktopWindow(preferredDisplayName: preferredDisplay, placement: placement)
         controller = AppController(collector: collector, window: window)
 
         NotificationCenter.default.addObserver(
@@ -44,9 +47,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.menu.setPreferredDisplayName(name)
                 // 화면 크기가 달라졌을 수 있으니 배치를 다시 계산한다.
                 self.controller.screenChanged()
+            },
+            onPlacementSelect: { [weak self] placement in
+                guard let self else { return }
+                defaults.set(placement.rawValue, forKey: Self.windowPlacementKey)
+                self.window.setPlacement(placement)
             }
         )
         menu.setPreferredDisplayName(preferredDisplay)
+        menu.setPlacement(placement)
         controller.onSnapshot = { [weak self] snapshot in self?.menu.update(with: snapshot) }
 
         power = PowerMonitor()

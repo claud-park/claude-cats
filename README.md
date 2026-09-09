@@ -26,6 +26,7 @@ open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 | `일시정지` / `재개` | 폴링·그리기 정지 |
 | `지금 새로고침` | 즉시 한 번 폴링 |
 | `디스플레이` | 고양이를 그릴 화면 선택 |
+| `표시 위치` | 창 레벨 선택 — 바탕화면 / 창 아래 / 항상 위 ([아래](#표시-위치)) |
 | `알림 연동` | Claude Code 훅 설치/해제 (아래 참고) |
 | `로그인 시 시작` | 로그인 항목 등록/해제 |
 | `종료` | 앱 종료 |
@@ -35,6 +36,27 @@ open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
 (`preferredDisplayName`) 에 저장한다 — 디스플레이 ID 는 재부팅·재연결마다 바뀌기 때문이다.
 고른 모니터를 뽑으면 자동으로 메인 디스플레이에 그리고, 메뉴에는 `<이름> (연결 안 됨)` 항목이
 체크된 채 남아 다시 꽂으면 그 화면으로 돌아간다. 하위 메뉴는 열 때마다 다시 만든다.
+
+## 표시 위치
+
+기본값(`바탕화면`)은 이름 그대로 바탕화면 레이어라, 터미널·에디터가 떠 있으면 고양이가 보이지
+않는다. 창을 다 치우기 싫으면 `표시 위치` 하위 메뉴에서 세 가지 중에 고른다(한 번에 하나,
+고른 항목에 체크가 붙는다).
+
+| 항목 | 창 레벨 | 이럴 때 |
+| --- | --- | --- |
+| `바탕화면 (아이콘 아래)` | `desktopIconWindow − 1` | 기본값. 바탕화면 아이콘에도 가린다 |
+| `창 아래 (아이콘 위)` | `desktopIconWindow + 1` | 아이콘 위로 올라오되 앱 창에는 여전히 가린다 |
+| `항상 위` | `NSWindow.Level.floating` | 작업하면서 곁눈질로 본다. **고양이가 다른 창 위에 겹쳐 보인다** |
+
+`항상 위` 여도 창은 `ignoresMouseEvents` 라 클릭·드래그·스크롤이 전부 뒤 창으로 통과한다 —
+고양이가 가리기는 해도 막지는 않는다. 앱이 `LSUIElement` 라 포커스를 뺏지도 않는다.
+이 모드에서만 `collectionBehavior` 에 `.fullScreenAuxiliary` 를 더해 전체화면 앱 위에도 뜬다
+(나머지 `.canJoinAllSpaces` · `.stationary` · `.ignoresCycle` 은 세 모드 공통이다).
+
+선택은 `UserDefaults` (`windowPlacement`) 에 raw value(`desktop` / `aboveIcons` /
+`alwaysOnTop`)로 저장한다. 키가 없거나 모르는 값이면 `바탕화면` 이다. 바꿔도 창을 다시 만들지
+않고 레벨만 갈아 끼우므로 고양이가 깜빡이지 않는다.
 
 ## 알림 연동
 
@@ -140,6 +162,14 @@ interactive 세션마다 고양이 한 마리를 배치한다. busy 세션의
 덮는다. `NSScreen.main` 은 키보드 포커스가 있는 화면이라 쓰지 않는다 — 포커스를 따라 고양이가
 옮겨다닌다. 디스플레이 구성이 바뀌면(`didChangeScreenParameters`) 창을 다시 맞추고 배치를
 새 화면 크기로 다시 계산한다.
+
+창은 `visibleFrame`(메뉴바·Dock 을 뺀 영역)이 아니라 `frame`(화면 전체)을 덮는다 — 바탕화면
+레이어라 좌표계가 흔들리지 않는 편이 낫고, Dock 이 숨었다 나타날 때마다 창을 다시 잡지 않아도
+된다. 대신 **배치**를 Dock 위로 올린다: `LayoutInsets.bottomInset(frame:visibleFrame:base:)`
+이 `visibleFrame.minY − frame.minY`(하단 Dock 이 먹은 높이, 없으면 0)에 기본 여백
+`SceneConfig.bottomInset`(40pt)을 더해 `Scene.layout` 에 넘긴다. Dock 이 좌·우에 있거나
+자동 숨김이면 두 `minY` 가 같아 40pt 그대로다. Dock 크기·위치·자동 숨김을 바꾸면 macOS 가
+`didChangeScreenParameters` 를 보내고, 거기서 `refitToScreen()` 이 여백을 다시 잰다.
 
 ## 직접 그린 SVG 넣는 법
 
