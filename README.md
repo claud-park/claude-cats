@@ -34,12 +34,50 @@ Spotlight 는 `/Applications` 를 본다. 홈 폴더 쪽 `~/Applications` 에 �
 설치 위치를 바꾸려면 `DESTDIR=/원하는/경로 ./scripts/install.sh`. 기본값이 아니면
 `lsregister` 와 재실행은 건너뛴다.
 
+### 코드 서명
+
+**왜 필요한가 — 업데이트가 파일 접근 권한을 잃지 않게.** 이 앱의 자체 업데이트는
+소스에서 다시 빌드해 번들을 갈아끼운다([업데이트](#업데이트) 참고). 그런데 저장소가
+`~/Documents` 처럼 TCC 가 지키는 위치에 있으면, 앱은 그 저장소를 읽기 위해 한 번
+**파일 접근 권한**을 받아 둬야 한다. 문제는 macOS 가 그 권한을 앱의 코드 서명
+**지정 요구사항**(designated requirement)에 묶는다는 점이다.
+
+ad-hoc 서명(`codesign --sign -`)은 빌드마다 코드 해시(cdhash)가 바뀌므로 지정
+요구사항도 매번 달라진다. 그래서 self-update 로 다시 빌드할 때마다 예전 권한이 새
+번들과 안 맞아 풀리고, 백그라운드 앱이라 다시 묻는 창도 못 띄운 채 업데이트 확인이
+막힌다(메뉴에 "소스 저장소에 접근하지 못했습니다"가 뜬다).
+
+안정적인 **self-signed 서명 ID** 로 서명하면 인증서가 그대로인 한 지정 요구사항이
+빌드마다 **동일**하다 — `identifier "com.claudecats.app" and certificate leaf = H"…"`.
+그래서 한 번 허용한 파일 접근 권한이 이후 업데이트에도 그대로 유지된다.
+
+**한 번만 실행한다.**
+
+```bash
+./scripts/make-signing-identity.sh   # 로그인 키체인에 "ClaudeCats Self-Signed" 생성
+./scripts/install.sh                 # 이제 이 ID 로 서명해 설치한다
+```
+
+- `make-signing-identity.sh` 는 `openssl` 로 코드 서명용 self-signed 인증서를 만들어
+  로그인 키체인에 넣는다. 애플 계정도, 네트워크도 필요 없다. 이미 있으면 아무것도 하지
+  않는다(idempotent).
+- 마지막 `security set-key-partition-list` 단계는 로그인 키체인 암호가 필요할 수 있다.
+  실패하면 스크립트가 정확한 다음 명령을 알려 주므로, 로그인 암호를 넣어 한 번 실행하면
+  된다(또는 codesign 이 처음 뜨는 "항상 허용" 창을 한 번 눌러도 된다).
+- 그 뒤 `bundle.sh`/`install.sh` 는 이 ID 를 자동으로 찾아 서명하고, Info.plist 에
+  `ClaudeCatsSigned=stable` 을 박는다. ID 가 없으면 예전처럼 ad-hoc 으로 물러서고
+  (`ClaudeCatsSigned=adhoc`), 그때는 업데이트 안내가 "이 ID 를 만들라"고 짚어 준다.
+- **처음 한 번의 파일 접근 허용은 여전히 필요하다.** 그 첫 허용 이후로는 재빌드해도
+  유지된다는 게 이 서명의 요점이다.
+
+이 ID 는 **로컬 전용**이다. 자기 맥에서 codesign 이 쓸, 매번 같은 인증서일 뿐이다.
+
 ### 배포
 
-지금 번들은 **ad-hoc 서명**(`codesign --sign -`)만 한다 — `TeamIdentifier=not set`.
-직접 빌드해서 자기 맥에 설치하는 데는 문제가 없지만, 남에게 `.app`·`.dmg` 를 건네면
-Gatekeeper 가 막는다. 배포하려면 Developer ID 인증서로 서명하고 공증(notarization)
-까지 받아야 한다 — **아직 구현돼 있지 않다.**
+self-signed 든 ad-hoc 이든 이 서명은 **자기 맥에 직접 빌드해 설치**하기 위한 것이다 —
+둘 다 `TeamIdentifier=not set` 이라 남에게 `.app`·`.dmg` 를 건네면 Gatekeeper 가 막는다.
+배포하려면 Developer ID 인증서로 서명하고 공증(notarization)까지 받아야 한다 —
+**아직 구현돼 있지 않다.**
 
 앱 아이콘은 `scripts/make-icon.swift` 가 `Design/cats/sitting.svg` 에서 만든다 —
 `#FUR` 계열 플레이스홀더를 팔레트 0번 색으로 채우고, 알파 경계상자를 재서 고양이를

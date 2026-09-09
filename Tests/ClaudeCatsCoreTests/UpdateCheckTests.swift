@@ -145,4 +145,22 @@ import Testing
         )
         #expect(dir == "/Users/nobody/claude-cats/dist")
     }
+
+    // MARK: - fileAccessBlockedMessage
+
+    /// 안정 서명 번들은 파일 접근 권한이 유지되므로 재빌드 안내를 붙이지 않는다.
+    @Test func fileAccessMessageForStableSigningHasNoRebuildHint() {
+        let msg = UpdateCheck.fileAccessBlockedMessage(signing: UpdateCheck.signingStable)
+        #expect(msg.contains("파일 및 폴더"))
+        #expect(!msg.contains("make-signing-identity.sh"))
+    }
+
+    /// ad-hoc·unknown·빈 값(스탬프 없는 옛 번들)은 전부 안정 서명 ID 를 만들라고 안내한다.
+    @Test func fileAccessMessageForAdhocSigningSuggestsStableIdentity() {
+        for signing in [UpdateCheck.signingAdhoc, "unknown", "", "  "] {
+            let msg = UpdateCheck.fileAccessBlockedMessage(signing: signing)
+            #expect(msg.contains("파일 및 폴더"))
+            #expect(msg.contains("make-signing-identity.sh"))
+        }
+    }
 }
