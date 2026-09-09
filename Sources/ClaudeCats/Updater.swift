@@ -159,6 +159,33 @@ final class Updater {
     ) -> UpdateStatus {
         defer { trimLog() }
         appendLog("== 확인 \(timestamp()) — \(repo) (\(branch) @ \(commit))")
+
+        // 네트워크에 나가기 전에, 이 저장소를 **로컬로** 열 수 있는지부터 짧게 본다.
+        //
+        // 이 앱은 ad-hoc 서명이라(scripts/bundle.sh 의 `codesign --sign -`) self-update 로
+        // 다시 빌드할 때마다 코드 서명 해시가 바뀐다. 그러면 이전에 받아 둔 파일 접근 권한(TCC)이
+        // 새 번들과 안 맞아 다시 물어야 하는 상태가 되는데, 저장소가 ~/Documents 아래에 있으면
+        // git 은 시작하자마자 `getcwd()`→`open()` 에서 그 동의 프롬프트를 기다리며 멈춘다(백그라운드
+        // 앱이라 프롬프트가 뜨지도 않는다). 예전에는 이게 20초 네트워크 타임아웃까지 매달려
+        // `fetch 실패(15)` 로만 보였다. rev-parse 는 네트워크가 필요 없으니, 여기서 짧게 막히면
+        // "네트워크 문제"가 아니라 "파일 접근 권한 문제"임을 몇 초 안에 분명히 돌려준다.
+        let reach = Shell.run("git", ["-C", repo, "rev-parse", "--is-inside-work-tree"],
+                              cwd: repo, timeout: 5)
+        if reach.status != 0 {
+            // 파일 접근 권한이 막히는 두 가지 모습: (1) 동의 프롬프트를 기다리며 멈춤 → timedOut,
+            // (2) 커널이 곧바로 거부 → git 이 "Operation not permitted"(EPERM) 로 빨리 끝남.
+            // 둘 다 같은 원인이라 같은 안내로 보낸다("네트워크" 오해를 남기지 않게).
+            let deniedByFileAccess = reach.timedOut
+                || reach.output.lowercased().contains("operation not permitted")
+            if deniedByFileAccess {
+                appendLog("저장소 로컬 접근이 막혔다(파일 접근 권한으로 본다)\n\(reach.output)")
+                return .offline("소스 저장소에 접근하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > "
+                    + "파일 및 폴더(또는 전체 디스크 접근)에서 ClaudeCats 를 허용한 뒤 다시 확인해 주세요.")
+            }
+            appendLog("rev-parse 실패(\(reach.status))\n\(reach.output)")
+            return .offline(reason(reach))
+        }
+
         let fetch = Shell.run("git", ["-C", repo, "fetch", "--quiet", "origin", branch],
                               cwd: repo, timeout: 20)
         if fetch.status != 0 {
@@ -205,7 +232,7 @@ final class Updater {
 
     /// 실패 이유를 한 줄로. git 은 마지막 줄에 제일 쓸모 있는 말을 남긴다.
     private nonisolated static func reason(_ result: Shell.Result) -> String {
-        if result.timedOut { return "시간이 초과됐습니다 (네트워크·인증 확인)" }
+        if result.timedOut { return "시간이 초과됐습니다 (네트워크·인증·파일 접근 권한 확인)" }
         let line = result.output
             .split(separator: "\n", omittingEmptySubsequences: true)
             .last
@@ -426,54 +453,22 @@ extension Updater.Stamp {
 
 // MARK: - 프로세스
 
-/// 명령 하나를 돌리고 끝날 때까지 기다린다. **백그라운드 큐에서만** 부를 것.
+/// git 을 앱 환경에 맞춰 돌린다. 프로세스 실행·타임아웃·출력 수집의 알맹이는
+/// `ClaudeCatsCore.ProcessRunner` 가 한다(그래야 파이프/타임아웃 동작을 테스트할 수 있다).
 private enum Shell {
-    struct Result {
-        var status: Int32
-        /// stdout·stderr 합본(끝에서 64KB까지). 순서를 보존하려고 파이프 하나를 같이 쓴다.
-        var output: String
-        var timedOut: Bool
-    }
+    typealias Result = ProcessRunner.Result
 
     /// 앱 번들은 Finder 가 띄우므로 PATH 가 거의 비어 있다. git·swift 가 있을 만한 곳을 직접 깐다.
     private static let searchPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    private static let outputLimit = 64 * 1024
 
-    /// `Process` 는 `Sendable` 이 아닌데 감시 타이머가 다른 스레드에서 봐야 한다.
-    /// 보는 건 `isRunning` 과 종료 요청뿐이고 둘 다 스레드 안전하다.
-    ///
-    /// 끝나면 `release()` 로 참조를 놓는다 — 안 놓으면 이미 죽은 프로세스를 타임아웃
-    /// 시각까지(설치는 15분) 감시 항목이 붙들고 있게 된다.
-    private final class Box: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stored: Process?
-
-        init(_ process: Process) { stored = process }
-
-        var process: Process? { lock.withLock { stored } }
-        func release() { lock.withLock { stored = nil } }
-    }
-
-    /// `onOutput` 은 읽는 족족 불린다(설치 로그 흘리기용). 호출한 큐에서 그대로 실행된다.
+    /// `onOutput` 은 읽는 족족 불린다(설치 로그 흘리기용).
     static func run(
         _ executable: String,
         _ arguments: [String],
         cwd: String?,
         timeout: TimeInterval,
-        onOutput: ((String) -> Void)? = nil
+        onOutput: (@Sendable (String) -> Void)? = nil
     ) -> Result {
-        let process = Process()
-        let box = Box(process)
-        // 절대 경로가 아니면 PATH 에서 찾는다(`/usr/bin/env` 가 그 일을 한다).
-        if executable.hasPrefix("/") {
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = [executable] + arguments
-        }
-        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchPath
         // git 메시지를 영어로 못 박는다. 우리는 "couldn't find remote ref" 같은 문구를 보고
@@ -484,57 +479,19 @@ private enum Shell {
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_PAGER"] = "cat"
         environment["GIT_ASKPASS"] = "/usr/bin/true"
-        environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-        process.environment = environment
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        process.standardInput = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return Result(status: -1, output: "\(executable) 실행 실패: \(error.localizedDescription)", timedOut: false)
-        }
-
-        // 자식을 자기 프로세스 그룹의 리더로 만든다. 그래야 타임아웃에서 **손자까지** 같이
-        // 내릴 수 있다 — 스크립트만 죽이면 그 밑의 `swift build` 가 파이프를 계속 붙들고 있어
-        // 아래 읽기 루프가 빌드가 끝날 때까지 안 끝난다(타임아웃이 타임아웃이 아니게 된다).
-        // 부모·자식 양쪽이 부르는 표준 관용구라 어느 쪽이 먼저 도착해도 된다.
-        let childPid = process.processIdentifier
-        _ = setpgid(childPid, childPid)
-
-        // 시간이 넘으면 SIGTERM. 파이프가 닫히면서 아래 읽기 루프도 같이 끝난다.
-        let watchdog = DispatchWorkItem {
-            guard let running = box.process, running.isRunning else { return }
-            // 리더가 된 게 **확인될 때만** 그룹째 내린다. setpgid 가 실패했다면 자식은 아직
-            // 우리 그룹에 있고, 그때 `kill(-우리그룹)` 은 앱 자신을 죽인다.
-            if getpgid(childPid) == childPid {
-                kill(-childPid, SIGTERM)
-            } else {
-                running.terminate()
-            }
-        }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
-
-        var collected = Data()
-        while true {
-            let chunk = pipe.fileHandleForReading.availableData
-            if chunk.isEmpty { break }
-            onOutput?(String(decoding: chunk, as: UTF8.self))
-            collected.append(chunk)
-            if collected.count > outputLimit { collected = Data(collected.suffix(outputLimit)) }
-        }
-        process.waitUntilExit()
-        watchdog.cancel()
-        box.release()
-
-        return Result(
-            status: process.terminationStatus,
-            output: String(decoding: collected, as: UTF8.self),
-            // 우리가 죽인 것 말고 git 이 시그널로 죽을 일은 거의 없다.
-            timedOut: process.terminationReason == .uncaughtSignal
+        // BatchMode: 프롬프트 대신 그냥 실패. ConnectTimeout: 죽은 네트워크에서 무한정 안 매달린다.
+        // accept-new: 새 호스트키는 자동 등록(known_hosts 프롬프트로 매달리지 않게). ControlMaster/
+        // ControlPath 끄기: 공유 ssh 마스터가 합쳐진 파이프의 쓰기 끝을 붙들어 종료 신호가 늦는 일을 막는다.
+        environment["GIT_SSH_COMMAND"] =
+            "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+            + " -o ControlMaster=no -o ControlPath=none"
+        return ProcessRunner.run(
+            executable: executable,
+            arguments: arguments,
+            cwd: cwd,
+            environment: environment,
+            timeout: timeout,
+            onOutput: onOutput
         )
     }
 }
