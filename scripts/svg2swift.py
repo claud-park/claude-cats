@@ -895,24 +895,30 @@ def encode_path(cmds):
             out.extend((OP_CUBIC, cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6]))
         elif head == "Z":
             out.append(OP_CLOSE)
+        else:
+            # 조용히 흘리면 그림에서 획이 하나 사라진 채로 커밋된다. 이름을 찍고 중단한다.
+            fail("인코딩할 수 없는 명령: %r" % (head,))
     return out
 
 
 def decode_path(values):
-    """encode_path 의 역. Swift `PathData.build` 와 같은 규칙으로 읽는다 —
-    배열이 잘렸거나 모르는 명령코드가 나오면 그 자리에서 조용히 멈춘다."""
+    """encode_path 의 역. Swift `PathData.build` 와 같은 규칙으로 읽는다 — 배열이
+    잘렸거나, 모르는 명령코드가 나오거나, 시작점(move) 없이 line·cubic·close 가
+    먼저 나오면 그 자리에서 조용히 멈춘다."""
     out = []
     i = 0
     n = len(values)
+    started = False           # Swift 쪽 `!path.isEmpty` 와 같은 뜻
     while i < n:
         op = values[i]
         if op == OP_MOVE and i + 2 < n:
             out.append(("M", values[i + 1], values[i + 2]))
-        elif op == OP_LINE and i + 2 < n:
+            started = True
+        elif op == OP_LINE and i + 2 < n and started:
             out.append(("L", values[i + 1], values[i + 2]))
-        elif op == OP_CUBIC and i + 6 < n:
+        elif op == OP_CUBIC and i + 6 < n and started:
             out.append(("C", *values[i + 1:i + 7]))
-        elif op == OP_CLOSE:
+        elif op == OP_CLOSE and started:
             out.append(("Z",))
         else:
             break

@@ -346,6 +346,21 @@ class EncodeTests(unittest.TestCase):
     def test_unknown_opcode_stops(self):
         self.assertEqual(S.decode_path([0, 1.0, 2.0, 9, 1.0, 2.0]), [("M", 1.0, 2.0)])
 
+    def test_unknown_command_head_aborts(self):
+        """조용히 흘리면 획 하나가 사라진 채로 커밋된다 — 이름을 찍고 중단해야 한다."""
+        with self.assertRaises(SystemExit) as ctx:
+            S.encode_path([("M", 0.0, 0.0), ("A", 1.0, 2.0)])
+        self.assertIn("인코딩할 수 없는 명령", str(ctx.exception))
+        self.assertIn("A", str(ctx.exception))
+
+    def test_commands_before_any_move_stop(self):
+        """Swift PathData.build 의 `!path.isEmpty` 가드와 같은 규칙이어야 한다."""
+        self.assertEqual(S.decode_path([S.OP_LINE, 5.0, 5.0]), [])
+        self.assertEqual(S.decode_path([S.OP_CUBIC, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0]), [])
+        self.assertEqual(S.decode_path([S.OP_CLOSE]), [])
+        # move 가 한 번 나온 뒤에는 close 도 정상이다.
+        self.assertEqual(S.decode_path([0, 1.0, 2.0, 3]), [("M", 1.0, 2.0), ("Z",)])
+
     def test_swift_data_puts_one_command_per_line(self):
         text = S.swift_data("x0", S.encode_path(self.SQUARE))
         self.assertEqual(text.splitlines(), [
@@ -480,6 +495,24 @@ class RealArtTests(unittest.TestCase):
         declared = re.findall(r"private let (\w+): \[Float\] = \[", sitting)
         self.assertEqual(sorted(used), sorted(declared))
         self.assertEqual(len(used), len(set(used)))
+
+    def test_committed_generated_files_match_the_generator(self):
+        """커밋된 생성물이 지금 생성기의 출력과 한 바이트도 다르지 않아야 한다.
+
+        어긋나면 누가 생성물을 손으로 고쳤거나 생성기를 고치고 안 돌린 것이다.
+        고치는 법: `scripts/generate-cat-art.sh`.
+        """
+        out_dir = os.path.join(REPO, "Sources", "ClaudeCats")
+        files = S.convert_files(list(self.all_poses))
+        on_disk = sorted(
+            name for name in os.listdir(out_dir)
+            if name.startswith("CatArt.") and name.endswith(".generated.swift")
+        )
+        self.assertEqual(on_disk, sorted(files))
+        for name in sorted(files):
+            with open(os.path.join(out_dir, name), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), files[name],
+                                 "%s 가 생성기 출력과 다르다 — generate-cat-art.sh 를 돌려라" % name)
 
     def test_encoded_art_round_trips_to_the_same_commands(self):
         """진짜 그림 전체가 인코딩 → 디코딩을 거쳐도 명령이 그대로여야 한다."""

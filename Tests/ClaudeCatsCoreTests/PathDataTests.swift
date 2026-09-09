@@ -72,4 +72,41 @@ import Testing
         #expect(PathData.build([2, 1, 1, 2, 2, 3, 3]).isEmpty)
         #expect(PathData.build([3]).isEmpty)
     }
+
+    /// NaN 이 명령코드 자리에 오면 어떤 case 와도 같지 않다 — 거기서 멈추되,
+    /// 그전까지 그린 경로는 살아 있어야 한다.
+    @Test func nanOpcodeStopsWithoutLosingWhatCameBefore() {
+        let path = PathData.build([0, 0, 0, Float.nan, 1, 1])
+        #expect(!path.isEmpty)
+        #expect(elements(path) == ["M 0.0 0.0"])
+    }
+
+    /// 좌표 자리의 NaN 은 CoreGraphics 가 알아서 삼킨다. 크래시만 안 나면 된다.
+    @Test func nanCoordinateDoesNotCrash() {
+        let path = PathData.build([0, 0, 0, 1, Float.nan, 4, 1, 8, 8])
+        #expect(!path.isEmpty)
+    }
+
+    /// 실제로 커밋된 생성물 조각(`CatArt.sleeping.generated.swift` 의 `sleepingBody7`).
+    /// 생성기가 내보내는 형식이 바뀌면 여기서 걸린다.
+    @Test func decodesARealGeneratedArray() {
+        let sleepingBody7: [Float] = [
+            0, 18.69, 14.34,
+            1, 18.21, 14.02,
+            2, 16.67, 12.99, 14.85, 12.44, 13, 12.44,
+            0, 23.8, 17.38,
+            2, 25.58, 17.8, 27.1, 18.96, 27.97, 20.58,
+            1, 28.19, 20.99,
+        ]
+        let path = PathData.build(sleepingBody7)
+        #expect(elements(path).count == 6)          // 서브패스 2개, 명령 6개
+        #expect(elements(path).filter { $0.hasPrefix("M") }.count == 2)
+
+        let box = path.boundingBox
+        func rounded(_ value: CGFloat) -> CGFloat { (value * 100).rounded() / 100 }
+        #expect(rounded(box.minX) == 13.00)
+        #expect(rounded(box.minY) == 12.44)
+        #expect(rounded(box.maxX) == 28.19)
+        #expect(rounded(box.maxY) == 20.99)
+    }
 }
