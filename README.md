@@ -16,7 +16,30 @@ swift build               # 빌드
 
 ./scripts/bundle.sh       # release 빌드 + dist/ClaudeCats.app 생성 (앱 아이콘 포함)
 open dist/ClaudeCats.app  # 번들 실행 (메뉴바 앱, Dock 아이콘 없음)
+
+./scripts/install.sh      # 번들 생성 + /Applications 설치 + Launch Services 등록
 ```
+
+### 설치
+
+`./scripts/install.sh` (= `./scripts/bundle.sh --install`) 이 번들을 만들어
+`/Applications/ClaudeCats.app` 로 넣고 `lsregister -f` 까지 돌린다. 그 자리에서
+돌고 있던 인스턴스가 있으면 먼저 내리고 설치 후 다시 띄운다(다른 경로 —
+`dist/` 에서 개발용으로 띄워 둔 것 — 은 건드리지 않는다).
+
+**`~/Applications` 는 안 된다.** Finder 사이드바의 "응용 프로그램"·Launchpad·
+Spotlight 는 `/Applications` 를 본다. 홈 폴더 쪽 `~/Applications` 에 넣으면 그 목록
+어디에도 안 뜬다.
+
+설치 위치를 바꾸려면 `DESTDIR=/원하는/경로 ./scripts/install.sh`. 기본값이 아니면
+`lsregister` 와 재실행은 건너뛴다.
+
+### 배포
+
+지금 번들은 **ad-hoc 서명**(`codesign --sign -`)만 한다 — `TeamIdentifier=not set`.
+직접 빌드해서 자기 맥에 설치하는 데는 문제가 없지만, 남에게 `.app`·`.dmg` 를 건네면
+Gatekeeper 가 막는다. 배포하려면 Developer ID 인증서로 서명하고 공증(notarization)
+까지 받아야 한다 — **아직 구현돼 있지 않다.**
 
 앱 아이콘은 `scripts/make-icon.swift` 가 `Design/cats/sitting.svg` 에서 만든다 —
 `#FUR` 계열 플레이스홀더를 팔레트 0번 색으로 채우고, 알파 경계상자를 재서 고양이를

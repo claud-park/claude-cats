@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # release 빌드 후 ClaudeCats.app 번들을 만든다. 출력: dist/ClaudeCats.app
+#
+# 사용법: ./scripts/bundle.sh            번들만 만든다
+#         ./scripts/bundle.sh --install  만들고 /Applications 에 설치한다 (install.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# `bundle.sh --install` 은 install.sh 로 넘긴다(그쪽이 다시 이 스크립트를 부른다).
+if [ "${1:-}" = "--install" ]; then
+  shift
+  exec ./scripts/install.sh "$@"
+fi
 
 swift build -c release 2>&1 | tail -1
 BIN=".build/release/ClaudeCats"
