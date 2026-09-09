@@ -6,9 +6,13 @@ import Foundation
     let screen = CGSize(width: 1440, height: 900)   // slotCount = 10
 
     func session(_ name: String, status: Status = .idle, subagents: [Subagent] = [],
-                 title: String? = nil) -> Session {
+                 title: String? = nil, alert: Alert? = nil) -> Session {
         Session(id: "id-\(name)", pid: 1, name: name, cwd: "/", status: status,
-                subagents: subagents, title: title)
+                subagents: subagents, title: title, alert: alert)
+    }
+
+    func alert(_ kind: AlertKind, _ message: String = "") -> Alert {
+        Alert(kind: kind, message: message, since: .now)
     }
 
     func sub(_ id: String) -> Subagent {
@@ -101,6 +105,58 @@ import Foundation
 
     @Test func bubbleChangeChangesLayoutEquality() {
         #expect(layout([session("a", title: "one")]) != layout([session("a", title: "two")]))
+    }
+
+    // MARK: - 알림
+
+    /// 알림이 있으면 idle 이어도 자지 않는다 — 포즈·말풍선 색이 모두 바뀐다.
+    @Test func alertOverridesPoseAndBubbleForIdleAndBusy() {
+        let l = layout([
+            session("waiting", status: .idle, title: "some title",
+                    alert: alert(.permission, "Claude needs your permission to run Bash")),
+            session("working", status: .busy, alert: alert(.idle)),
+        ])
+        let waiting = l.cats.first { $0.label == "waiting" }!
+        #expect(waiting.pose == .alert && waiting.animated)
+        #expect(waiting.bubbleStyle == .alert)
+        #expect(waiting.bubble == "권한 요청: run Bash")     // 제목 대신 알림이 뜬다
+        let working = l.cats.first { $0.label == "working" }!
+        #expect(working.pose == .alert && working.bubble == "입력 기다리는 중")
+    }
+
+    @Test func alertBubbleTextPerKind() {
+        #expect(Scene.alertBubble(alert(.idle)) == "입력 기다리는 중")
+        #expect(Scene.alertBubble(alert(.agentNeedsInput)) == "에이전트 입력 대기")
+        // 접두어가 없으면 메시지를 그대로 쓴다.
+        #expect(Scene.alertBubble(alert(.permission, "Edit src/main.swift")) == "권한 요청: Edit src/main.swift")
+        // 24자를 넘으면 자른다.
+        #expect(Scene.alertBubble(alert(.permission, String(repeating: "x", count: 40)))
+            == "권한 요청: " + String(repeating: "x", count: 24))
+        // 메시지가 비면(또는 접두어만 있으면) 일반 문구.
+        #expect(Scene.alertBubble(alert(.permission, "")) == "권한 요청 중")
+        #expect(Scene.alertBubble(alert(.permission, "Claude needs your permission to ")) == "권한 요청 중")
+    }
+
+    /// 애니메이션이 꺼지면 알림 고양이도 멈춘다. 새끼는 그대로 앉은 자세다.
+    @Test func alertCatDoesNotAnimateWhenAnimationsAreOff() {
+        let l = layout([session("a", status: .busy, subagents: [sub("k1")], alert: alert(.idle))],
+                       animations: false)
+        #expect(l.cats.allSatisfy { $0.animated == false })
+        #expect(l.cats.first { $0.id == "id-a/k1" }?.pose == .sitting)
+        #expect(l.cats.first { $0.id == "id-a/k1" }?.bubbleStyle == .title)
+    }
+
+    @Test func alertChangeChangesLayoutEquality() {
+        let base = [session("a", status: .idle)]
+        let alerted = [session("a", status: .idle, alert: alert(.idle))]
+        #expect(layout(base) != layout(alerted))
+        // 같은 알림이 계속 떠 있으면(since 만 다르면) 다시 그리지 않는다.
+        #expect(layout(alerted) == layout(alerted))
+    }
+
+    @Test func noAlertKeepsTitleBubbleStyle() {
+        let l = layout([session("a", title: "t")])
+        #expect(l.cats[0].bubbleStyle == .title && l.cats[0].pose == .sleeping)
     }
 
     @Test func paletteIndexWithinRangeAndStable() {

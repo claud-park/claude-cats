@@ -932,29 +932,58 @@ def camel(text):
     return parts[0][0].lower() + parts[0][1:] + "".join(p[0].upper() + p[1:] for p in parts[1:])
 
 
+# alert.svg 를 아직 안 그렸어도 Swift 는 컴파일돼야 한다(런타임이 CatArt.alert* 를 참조한다).
+# 그럴 땐 앉은 자세를 그대로 별칭으로 삼는다.
+FALLBACK_POSE = ("alert", "sitting")
+
+
+def fallback_aliases(stems, section_names, scalar_names):
+    """alert 가 입력에 없으면 sitting 의 상수를 alert* 이름으로 다시 노출한다."""
+    missing, source = FALLBACK_POSE
+    if missing in stems or source not in stems:
+        return []
+    lines = ["    // %s.svg 가 아직 없다 — %s 자세를 그대로 쓴다." % (missing, source)]
+    for suffix in ("Body", "TailA", "TailB"):
+        if source + suffix in section_names:
+            lines.append("    static let %s%s: [CatArtLayer] = %s%s"
+                         % (missing, suffix, source, suffix))
+    if source + "Top" in scalar_names:
+        lines.append("    static let %sTop: CGFloat = %sTop" % (missing, source))
+    if source + "TailAboveBody" in scalar_names:
+        lines.append("    static let %sTailAboveBody: Bool = %sTailAboveBody"
+                     % (missing, source))
+    return ["\n".join(lines)]
+
+
 def convert_files(paths):
     sections = []
     scalars = []
+    stems = []
+    scalar_names = []
     for path in paths:
         with open(path, encoding="utf-8") as handle:
             groups, tail_above = parse_svg(handle.read(), want_order=True)
         stem = camel(os.path.splitext(os.path.basename(path))[0])
+        stems.append(stem)
         for bucket in ("body", "tailA", "tailB"):
             if bucket in groups:
                 suffix = bucket[0].upper() + bucket[1:]
                 sections.append((stem + suffix, groups[bucket]))
         box = layers_bounds([layer for layers in groups.values() for layer in layers])
+        scalar_names.append(stem + "Top")
         scalars.append(
             "    /// 말풍선을 얹을 그림 꼭대기(AppKit y). 선 두께는 빼고 경로 bbox 만 본다.\n"
             "    static let %sTop: CGFloat = %s" % (stem, num(box[3] if box else BOX))
         )
         if "tailA" in groups:
+            scalar_names.append(stem + "TailAboveBody")
             scalars.append(
                 "    /// 원본 SVG 에서 꼬리가 몸통 뒤에 오면 false — 런타임이 그릇 레이어 순서를 맞춘다.\n"
                 "    static let %sTailAboveBody: Bool = %s" % (stem, "true" if tail_above else "false")
             )
     if not sections:
         fail("변환할 도형이 없다")
+    scalars += fallback_aliases(set(stems), {name for name, _ in sections}, set(scalar_names))
     body = "\n\n".join(swift_layers(name, layers) for name, layers in sections)
     return HEADER + "\n" + "\n\n".join(scalars) + "\n\n" + body + "\n}\n"
 

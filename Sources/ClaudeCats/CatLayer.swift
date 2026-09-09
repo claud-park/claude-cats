@@ -55,7 +55,6 @@ final class CatLayer: CALayer {
         bubbleLayer.anchorPoint = .zero
         bubbleLayer.bounds = CGRect(x: -70, y: 0, width: 204, height: 100)
         bubbleLayer.position = CGPoint(x: -70, y: 0)
-        bubbleLayer.fillColor = NSColor.white.withAlphaComponent(0.95).cgColor
         bubbleLayer.strokeColor = nil
         bubbleLayer.contentsScale = contentsScale
 
@@ -64,11 +63,9 @@ final class CatLayer: CALayer {
         bubbleTextLayer.truncationMode = .end
         bubbleTextLayer.contentsScale = contentsScale
 
-        // 꼬리를 몸 위에 얹을지 뒤에 깔지는 원본 SVG 의 문서 순서가 정한다.
-        let art: [CALayer] = CatArt.sittingTailAboveBody
-            ? [bodyLayer, tailA, tailB]
-            : [tailA, tailB, bodyLayer]
-        (art + [labelLayer, badgeLayer, bubbleLayer, bubbleTextLayer]).forEach(addSublayer)
+        // 앞 세 자리는 아트 그릇이다. 몸·꼬리 순서는 포즈마다 다를 수 있어 rebuildArt 가 다시 잡는다.
+        ([bodyLayer, tailA, tailB, labelLayer, badgeLayer, bubbleLayer, bubbleTextLayer])
+            .forEach(addSublayer)
         apply(placement)
     }
 
@@ -123,8 +120,9 @@ final class CatLayer: CALayer {
             badgeLayer.isHidden = p.overflowCount == 0
         }
 
-        // 꼭지 y 는 포즈에, 왼쪽 클램프는 가로 위치에 걸린다. 셋 다 감시한다.
-        if first || p.bubble != previous.bubble || poseChanged || p.origin.x != previous.origin.x {
+        // 꼭지 y 는 포즈에, 왼쪽 클램프는 가로 위치에 걸린다. 넷 다 감시한다.
+        if first || p.bubble != previous.bubble || p.bubbleStyle != previous.bubbleStyle
+            || poseChanged || p.origin.x != previous.origin.x {
             applyBubble(p)
         }
     }
@@ -144,7 +142,7 @@ final class CatLayer: CALayer {
     }
 
     func tickTail() {
-        guard placement.pose == .sitting else { return }
+        guard placement.pose == .sitting || placement.pose == .alert else { return }
         tailToggle.toggle()
         tailA.isHidden = tailToggle
         tailB.isHidden = !tailToggle
@@ -168,13 +166,34 @@ final class CatLayer: CALayer {
             build(CatArt.sittingTailB, into: tailB)
             tailA.isHidden = false
             tailB.isHidden = true
+            orderArt(tailAboveBody: CatArt.sittingTailAboveBody)
+        case .alert:
+            build(CatArt.alertBody, into: bodyLayer)
+            build(CatArt.alertTailA, into: tailA)
+            build(CatArt.alertTailB, into: tailB)
+            tailA.isHidden = false
+            tailB.isHidden = true
+            orderArt(tailAboveBody: CatArt.alertTailAboveBody)
         case .sleeping:
             // idle 은 꼬리가 몸에 붙은 정지 그림이라 프레임 레이어를 쓰지 않는다.
             build(CatArt.sleepingBody, into: bodyLayer)
             tailA.isHidden = true
             tailB.isHidden = true
+            orderArt(tailAboveBody: true)
         }
         tailToggle = false
+    }
+
+    /// 꼬리를 몸 위에 얹을지 뒤에 깔지는 원본 SVG 의 문서 순서가 정한다(포즈마다 다를 수 있다).
+    /// 아트 그릇 셋은 항상 서브레이어 맨 앞 세 자리를 쓴다.
+    private func orderArt(tailAboveBody: Bool) {
+        let ordered: [CALayer] = tailAboveBody
+            ? [bodyLayer, tailA, tailB]
+            : [tailA, tailB, bodyLayer]
+        for (index, layer) in ordered.enumerated() {
+            layer.removeFromSuperlayer()
+            insertSublayer(layer, at: UInt32(index))
+        }
     }
 
     private func build(_ art: [CatArtLayer], into container: CALayer) {
@@ -239,7 +258,23 @@ final class CatLayer: CALayer {
         /// 꼭지 끝 y. 그림 꼭대기 바로 위에 둔다 — 자는 자세는 웅크려서 훨씬 낮다.
         /// 높이는 생성기가 아트에서 재 준다(`CatArt.*Top`).
         static func tipY(for pose: Pose) -> CGFloat {
-            (pose == .sitting ? CatArt.sittingTop : CatArt.sleepingTop) + 2
+            let top: CGFloat
+            switch pose {
+            case .sitting: top = CatArt.sittingTop
+            case .alert: top = CatArt.alertTop
+            case .sleeping: top = CatArt.sleepingTop
+            }
+            return top + 2
+        }
+
+        /// 제목은 흰 바탕에 검은 글자, 알림은 노란 바탕에 짙은 갈색 굵은 글자.
+        static func fill(for style: BubbleStyle) -> CGColor {
+            switch style {
+            case .title:
+                return NSColor.white.withAlphaComponent(0.95).cgColor
+            case .alert:
+                return NSColor(srgbRed: 1.0, green: 0xE5 / 255, blue: 0x8A / 255, alpha: 0.97).cgColor
+            }
         }
     }
 
@@ -251,9 +286,13 @@ final class CatLayer: CALayer {
             bubbleLayer.path = nil
             return
         }
-        let attributed = Self.fitted(text, maxWidth: Bubble.maxWidth - Bubble.padding, Self.attributedBubble)
+        let style = p.bubbleStyle
+        let attributed = Self.fitted(text, maxWidth: Bubble.maxWidth - Bubble.padding) {
+            Self.attributedBubble($0, style: style)
+        }
         let width = min(Bubble.maxWidth, ceil(attributed.size().width) + Bubble.padding)
         let tipY = Bubble.tipY(for: p.pose)
+        bubbleLayer.fillColor = Bubble.fill(for: style)
 
         // 맨 왼쪽 열(origin.x = 16)에서는 가운데 정렬한 사각형이 화면 밖으로 17pt 나간다.
         // 사각형만 오른쪽으로 밀고 꼭지는 머리 위(centerX)에 그대로 둔다.
@@ -285,11 +324,19 @@ final class CatLayer: CALayer {
         return path
     }
 
-    private static func attributedBubble(_ text: String) -> NSAttributedString {
-        NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: Bubble.fontSize),
-            .foregroundColor: NSColor(srgbRed: 0x22 / 255, green: 0x1F / 255, blue: 0x22 / 255, alpha: 1),
-        ])
+    private static func attributedBubble(_ text: String, style: BubbleStyle) -> NSAttributedString {
+        switch style {
+        case .title:
+            return NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: Bubble.fontSize),
+                .foregroundColor: NSColor(srgbRed: 0x22 / 255, green: 0x1F / 255, blue: 0x22 / 255, alpha: 1),
+            ])
+        case .alert:
+            return NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: Bubble.fontSize, weight: .bold),
+                .foregroundColor: NSColor(srgbRed: 0x3B / 255, green: 0x2F / 255, blue: 0, alpha: 1),
+            ])
+        }
     }
 
     // MARK: - 라벨

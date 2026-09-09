@@ -1,6 +1,8 @@
 """import-cat-svg 검증. 실행: python3 -m unittest scripts/test_import_cat_svg.py"""
 
+import contextlib
 import importlib.util
+import io
 import os
 import re
 import sys
@@ -299,6 +301,35 @@ class SleepingTests(unittest.TestCase):
         svg, info = convert('<path d="%s" fill="#7D6C62"/>' % BOXY, pose="sleeping")
         self.assertEqual(group_ids(svg), ["body"])
         self.assertEqual(info["body"], 1)
+
+
+class AlertPoseTests(unittest.TestCase):
+    """alert 자세는 sitting 과 똑같이 다룬다 — 꼬리 두 프레임을 살린다."""
+
+    def test_tail_frames_are_kept(self):
+        svg, info = convert('<path d="%s" fill="#F6EEE7"/>'
+                            '<path id="tail-a" d="M300 300 L320 300 L320 340 Z" fill="#7D6C62"/>'
+                            '<path id="tail-b" d="M300 300 L330 300 L330 340 Z" fill="#7D6C62"/>'
+                            % BOXY, pose="alert")
+        self.assertEqual(group_ids(svg), ["body", "tail-a", "tail-b"])
+        self.assertEqual((info["body"], info["tailA"], info["tailB"]), (1, 1, 1))
+        self.assertFalse(info["synthesizedTailB"])
+
+    def test_tail_b_is_synthesized_like_sitting(self):
+        _, info = convert('<path d="%s" fill="#F6EEE7"/>'
+                          '<path id="tail-a" d="M300 300 L320 300 L320 340 Z" fill="#7D6C62"/>'
+                          % BOXY, pose="alert")
+        self.assertTrue(info["synthesizedTailB"])
+
+    def test_without_any_tail_aborts(self):
+        with self.assertRaises(SystemExit) as ctx:
+            convert('<path d="%s" fill="#7D6C62"/>' % BOXY, pose="alert")
+        self.assertIn("tail-a", str(ctx.exception))
+
+    def test_unknown_pose_is_rejected(self):
+        # argparse 는 사용법을 stderr 에 찍는다. 테스트 출력이 지저분해지지 않게 삼킨다.
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            args(pose="dancing")
 
 
 class IdTests(unittest.TestCase):

@@ -11,6 +11,7 @@ final class StatusMenu: NSObject {
     private let loginItem = NSMenuItem(title: "로그인 시 시작", action: #selector(toggleLogin), keyEquivalent: "")
     private let displayItem = NSMenuItem(title: "디스플레이", action: nil, keyEquivalent: "")
     private let displayMenu = NSMenu()
+    private let hooksItem = NSMenuItem(title: "알림 연동", action: #selector(toggleHooks), keyEquivalent: "")
     private let onPauseToggle: (Bool) -> Void
     private let onRefresh: () -> Void
     private let onDisplaySelect: (String?) -> Void
@@ -46,26 +47,30 @@ final class StatusMenu: NSObject {
         let quit = NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         summaryItem.isEnabled = false                                  // 읽기 전용 요약 줄
-        for entry in [pauseItem, refresh, loginItem, quit, displayItem] { entry.isEnabled = true }
-        for entry in [pauseItem, refresh, loginItem] { entry.target = self }
+        for entry in [pauseItem, refresh, loginItem, quit, displayItem, hooksItem] { entry.isEnabled = true }
+        for entry in [pauseItem, refresh, loginItem, hooksItem] { entry.target = self }
         // quit 은 target 없이 응답 체인을 타고 NSApp.terminate 로 간다.
 
         // 하위 메뉴는 열릴 때마다 menuNeedsUpdate 에서 다시 만든다(모니터가 꽂혔다 빠진다).
         displayMenu.autoenablesItems = false
         displayMenu.delegate = self
         displayItem.submenu = displayMenu
+        // 훅 체크 표시는 파일이 진실이다(다른 앱·사용자가 지웠을 수 있다). 열 때마다 다시 읽는다.
+        menu.delegate = self
 
         menu.addItem(summaryItem)
         menu.addItem(.separator())
         menu.addItem(pauseItem)
         menu.addItem(refresh)
         menu.addItem(displayItem)
+        menu.addItem(hooksItem)
         menu.addItem(.separator())
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(quit)
         item.menu = menu
         updateLoginState()
+        updateHooksState()
         rebuildDisplayMenu()
     }
 
@@ -131,12 +136,27 @@ final class StatusMenu: NSObject {
     private func updateLoginState() {
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
+
+    /// Claude Code 훅 설치/해제. 파일 작업은 HookSetup 이 하고 실패도 거기서 알린다.
+    @objc private func toggleHooks() {
+        HookSetup.setInstalled(hooksItem.state != .on)
+        updateHooksState()
+        onRefresh()   // 켜자마자 이벤트 디렉터리를 한 번 읽는다
+    }
+
+    private func updateHooksState() {
+        hooksItem.state = HookSetup.isInstalled() ? .on : .off
+    }
 }
 
 extension StatusMenu: NSMenuDelegate {
-    /// 하위 메뉴가 열리기 직전. 지금 붙어 있는 디스플레이로 목록을 다시 만든다.
+    /// 메뉴가 열리기 직전. 하위 메뉴는 지금 붙어 있는 디스플레이로 다시 만들고,
+    /// 본 메뉴는 훅 체크 표시를 파일에서 다시 읽는다.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === displayMenu else { return }
-        rebuildDisplayMenu()
+        if menu === displayMenu {
+            rebuildDisplayMenu()
+        } else {
+            updateHooksState()
+        }
     }
 }

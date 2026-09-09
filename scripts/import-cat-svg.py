@@ -428,7 +428,8 @@ def build_arguments(argv):
     parser = argparse.ArgumentParser(
         prog="import-cat-svg.py", description="Figma SVG → Design/cats/<포즈>.svg")
     parser.add_argument("source")
-    parser.add_argument("--pose", required=True, choices=("sitting", "sleeping"))
+    # alert 는 sitting 과 같게 다룬다 — 꼬리 두 프레임을 그대로 살린다.
+    parser.add_argument("--pose", required=True, choices=("sitting", "sleeping", "alert"))
     parser.add_argument("--out", required=True)
     parser.add_argument("--fur", required=True, help="몸통 털색 (예: '#7D6C62')")
     parser.add_argument("--fur-dark", required=True, help="어두운 털색 (예: '#66584F')")

@@ -25,6 +25,8 @@ public protocol FileSystem: Sendable {
     /// 파일 끝에서 최대 maxBytes 만. transcript 는 수 MB 라 통째로 읽지 않는다.
     /// 앞쪽이 UTF-8 문자 중간에서 잘릴 수 있으니 호출자가 첫 줄을 버려야 한다.
     func readTail(_ url: URL, maxBytes: Int) throws -> Data
+    /// 파일 하나를 지운다. 없으면 throw. (훅 이벤트 파일은 한 번 읽고 지운다.)
+    func remove(_ url: URL) throws
     /// kill(pid, 0) 기준. EPERM 은 살아있는 것으로 본다.
     func processAlive(_ pid: Int32) -> Bool
 }
@@ -64,6 +66,10 @@ public struct RealFileSystem: FileSystem {
         // readToEnd() 는 maxBytes 를 넘겨 읽는다 — 그래서 길이를 명시한다.
         let wanted = min(maxBytes, Int(size - offset))
         return try handle.read(upToCount: wanted) ?? Data()
+    }
+
+    public func remove(_ url: URL) throws {
+        try FileManager.default.removeItem(at: url)
     }
 
     public func processAlive(_ pid: Int32) -> Bool {
