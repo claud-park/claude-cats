@@ -6,7 +6,7 @@ import ServiceManagement
 @MainActor
 final class StatusMenu: NSObject {
     private let item: NSStatusItem
-    private let summaryItem = NSMenuItem(title: "고양이 0마리", action: nil, keyEquivalent: "")
+    private let summaryItem = NSMenuItem(title: "와글와글 0마리", action: nil, keyEquivalent: "")
     /// 세션 파일을 못 읽었을 때만 보이는 경고 줄. 건강하면 숨긴다.
     private let healthItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let pauseItem = NSMenuItem(title: "일시정지", action: #selector(togglePause), keyEquivalent: "")
@@ -41,7 +41,7 @@ final class StatusMenu: NSObject {
     private var placement: WindowPlacement = .desktop
     private var concept: CatConcept = .team
     /// 마지막 폴링이 만든 요약 문자열. 업데이트 중에는 이 자리를 진행 표시가 빌려 쓴다.
-    private var summaryText = "고양이 0마리"
+    private var summaryText = "와글와글 0마리"
     /// 메뉴바 아이콘이 실제 이미지인지. 배지(`•`)를 어디에 붙일지가 달라진다.
     private var hasIconImage = false
 
@@ -234,7 +234,7 @@ final class StatusMenu: NSObject {
     func update(with snapshot: Snapshot) {
         let busy = snapshot.sessions.filter { $0.status == .busy }.count
         let kittens = snapshot.sessions.reduce(0) { $0 + $1.subagents.count }
-        var text = "고양이 \(snapshot.sessions.count)마리 · 작업 중 \(busy)"
+        var text = "와글와글 \(snapshot.sessions.count)마리 · 작업 중 \(busy)"
         if kittens > 0 { text += " · 새끼 \(kittens)" }
         summaryText = text
         renderSummary()
@@ -251,7 +251,7 @@ final class StatusMenu: NSObject {
     ///
     /// 이 앱은 `~/.claude` 의 문서화되지 않은 구조에 기대므로 Claude Code 업데이트로 조용히
     /// 깨질 수 있다. 그때 "정말 세션이 없다"와 "파일은 있는데 못 읽었다"가 똑같이
-    /// "고양이 0마리"로 보이면 사용자가 알아차릴 방법이 없다.
+    /// "와글와글 0마리"로 보이면 사용자가 알아차릴 방법이 없다.
     ///
     /// 반대로 죽은 pid·비대화형만 있어서 0마리인 건 정상이라 아무것도 띄우지 않는다 —
     /// 늘 떠 있는 경고는 아무도 안 읽는다.
