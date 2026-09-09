@@ -966,11 +966,19 @@ def swift_layers(name, layers):
 
 
 SHARED_FILE = "CatArt.generated.swift"
-POSE_FILE = "CatArt.%s.generated.swift"
+# 컨셉·포즈별 파일. 컨셉 하나(포즈 하나)만 고쳐도 그 파일만 다시 컴파일되게 나눈다(issue #4).
+CONCEPT_POSE_FILE = "CatArt.%s.%s.generated.swift"
+
+# 알 수 있는 포즈. 컨셉마다 sitting·sleeping 은 필수, alert 는 없으면 sitting 으로 폴백한다.
+POSE_ORDER = ("sitting", "sleeping", "alert")
+
+# 팔레트 플레이스홀더 페인트. 이 중 하나라도 쓰는 컨셉은 recolorable(팔레트로 색을 바꾼다).
+FUR_PLACEHOLDERS = (FUR, FUR_DARK, FUR_LIGHT)
 
 SHARED_HEADER = """// GENERATED — edit Design/cats/*.svg and run scripts/generate-cat-art.sh
-// 여기에는 타입과 별칭만 있다. 포즈별 도형은 CatArt.<포즈>.generated.swift 로 나뉜다
-// (그림 한 포즈만 고쳐도 그 파일만 다시 컴파일되게 — issue #4).
+// 여기에는 타입과 컨셉별 아트 묶음(CatArtSet)만 있다. 컨셉·포즈별 도형은
+// CatArt.<컨셉>.<포즈>.generated.swift 로 나뉜다(그림 하나만 고쳐도 그 파일만 다시 컴파일되게 — issue #4).
+import ClaudeCatsCore
 import CoreGraphics
 import QuartzCore
 
@@ -994,9 +1002,28 @@ struct CatArtLayer: @unchecked Sendable {
     let opacity: Float
 }
 
+/// 한 컨셉(고양이 종류)의 네 포즈 아트. `recolorable` 이 false 면 팔레트 색을 입히지 않는다
+/// (켄지/동글캣처럼 색이 고정인 고양이). 꼬리 프레임이 없는 컨셉은 Tail 배열이 비고
+/// `sittingTailAboveBody` 가 false 다.
+struct CatArtSet: Sendable {
+    let sittingBody: [CatArtLayer]
+    let sittingTailA: [CatArtLayer]
+    let sittingTailB: [CatArtLayer]
+    let sleepingBody: [CatArtLayer]
+    let alertBody: [CatArtLayer]
+    let alertTailA: [CatArtLayer]
+    let alertTailB: [CatArtLayer]
+    let sittingTop: CGFloat
+    let sleepingTop: CGFloat
+    let alertTop: CGFloat
+    let sittingTailAboveBody: Bool
+    let alertTailAboveBody: Bool
+    let recolorable: Bool
+}
+
 enum CatArt {"""
 
-POSE_HEADER = """// GENERATED — edit Design/cats/%s.svg and run scripts/generate-cat-art.sh
+CONCEPT_POSE_HEADER = """// GENERATED — edit %s and run scripts/generate-cat-art.sh
 // 좌표는 64×64 박스, AppKit 방향(y 위로)으로 이미 뒤집혀 있다.
 // 경로는 코드가 아니라 데이터다 — 파일 끝의 [명령코드, 좌표...] 배열을
 // PathData.build 가 처음 쓸 때 한 번 CGPath 로 편다.
@@ -1015,75 +1042,132 @@ def camel(text):
     return parts[0][0].lower() + parts[0][1:] + "".join(p[0].upper() + p[1:] for p in parts[1:])
 
 
-# alert.svg 를 아직 안 그렸어도 Swift 는 컴파일돼야 한다(런타임이 CatArt.alert* 를 참조한다).
-# 그럴 땐 앉은 자세를 그대로 별칭으로 삼는다.
-FALLBACK_POSE = ("alert", "sitting")
+def concept_set(concept, poses):
+    """한 컨셉의 `static let <concept> = CatArtSet(...)` 소스.
+
+    poses 는 {포즈: {stem, tailA, tailB, tailAbove, recolorable}}. alert 원본이 없으면
+    sitting 을 그대로 alert 로 쓴다(런타임이 alert* 를 항상 참조하므로). 꼬리 프레임이
+    없는 포즈는 Tail 배열이 비고 TailAboveBody 가 false 다.
+    """
+    for required in ("sitting", "sleeping"):
+        if required not in poses:
+            fail("컨셉 %r 에 %s 포즈가 없다" % (concept, required))
+    alert = "alert" if "alert" in poses else "sitting"
+
+    def stem(pose):
+        return poses[pose]["stem"]
+
+    def body(pose):
+        return stem(pose) + "Body"
+
+    def tail(pose, which):
+        return stem(pose) + "Tail" + which if poses[pose]["tail" + which] else "[]"
+
+    def top(pose):
+        return stem(pose) + "Top"
+
+    def above(pose):
+        return stem(pose) + "TailAboveBody" if poses[pose]["tailAbove"] else "false"
+
+    recolorable = any(poses[pose]["recolorable"] for pose in poses)
+    fields = [
+        ("sittingBody", body("sitting")),
+        ("sittingTailA", tail("sitting", "A")),
+        ("sittingTailB", tail("sitting", "B")),
+        ("sleepingBody", body("sleeping")),
+        ("alertBody", body(alert)),
+        ("alertTailA", tail(alert, "A")),
+        ("alertTailB", tail(alert, "B")),
+        ("sittingTop", top("sitting")),
+        ("sleepingTop", top("sleeping")),
+        ("alertTop", top(alert)),
+        ("sittingTailAboveBody", above("sitting")),
+        ("alertTailAboveBody", above(alert)),
+        ("recolorable", "true" if recolorable else "false"),
+    ]
+    lines = ["    static let %s = CatArtSet(" % concept]
+    for index, (key, value) in enumerate(fields):
+        comma = "," if index < len(fields) - 1 else ""
+        lines.append("        %s: %s%s" % (key, value, comma))
+    lines.append("    )")
+    return "\n".join(lines)
 
 
-def fallback_aliases(stems, section_names, scalar_names):
-    """alert 가 입력에 없으면 sitting 의 상수를 alert* 이름으로 다시 노출한다."""
-    missing, source = FALLBACK_POSE
-    if missing in stems or source not in stems:
-        return []
-    lines = ["    // %s.svg 가 아직 없다 — %s 자세를 그대로 쓴다." % (missing, source)]
-    for suffix in ("Body", "TailA", "TailB"):
-        if source + suffix in section_names:
-            lines.append("    static let %s%s: [CatArtLayer] = %s%s"
-                         % (missing, suffix, source, suffix))
-    if source + "Top" in scalar_names:
-        lines.append("    static let %sTop: CGFloat = %sTop" % (missing, source))
-    if source + "TailAboveBody" in scalar_names:
-        lines.append("    static let %sTailAboveBody: Bool = %sTailAboveBody"
-                     % (missing, source))
-    return ["\n".join(lines)]
+def concept_switch(concept_order):
+    """`CatArt.set(_:)` — CatConcept → CatArtSet 스위치."""
+    lines = [
+        "    /// 고양이 종류에 맞는 아트 묶음. 메뉴바 `고양이 종류` 선택이 이 값을 고른다.",
+        "    static func set(_ concept: CatConcept) -> CatArtSet {",
+        "        switch concept {",
+    ]
+    for concept in concept_order:
+        lines.append("        case .%s: return %s" % (concept, concept))
+    lines.append("        }")
+    lines.append("    }")
+    return "\n".join(lines)
 
 
-def convert_files(paths):
-    """[SVG 경로] → {생성 파일 이름: Swift 소스}. 포즈마다 한 파일 + 공용 타입 한 파일."""
+def convert_files(inputs):
+    """[(컨셉, 포즈, SVG 경로)] → {생성 파일 이름: Swift 소스}.
+
+    컨셉·포즈마다 한 파일 + 공용 타입/CatArtSet 한 파일. 입력 순서가 파일·상수 순서다.
+    """
     files = {}
-    stems = []
-    section_names = set()
-    scalar_names = set()
-    for path in paths:
+    concept_order = []
+    concept_poses = {}
+    for concept, pose, path in inputs:
+        if concept not in concept_poses:
+            concept_order.append(concept)
+            concept_poses[concept] = {}
         with open(path, encoding="utf-8") as handle:
             groups, tail_above = parse_svg(handle.read(), want_order=True)
-        stem = camel(os.path.splitext(os.path.basename(path))[0])
-        stems.append(stem)
+        stem = camel(concept + "-" + pose)
 
         sections, data = [], []
         for bucket in ("body", "tailA", "tailB"):
             if bucket in groups:
                 name = stem + bucket[0].upper() + bucket[1:]
-                section_names.add(name)
                 text, arrays = swift_layers(name, groups[bucket])
                 sections.append(text)
                 data.extend(arrays)
         if not sections:
             fail("%s 에 변환할 도형이 없다" % path)
 
+        recolorable = any(
+            layer.fill in FUR_PLACEHOLDERS or layer.stroke in FUR_PLACEHOLDERS
+            for layers in groups.values() for layer in layers
+        )
+
         box = layers_bounds([layer for layers in groups.values() for layer in layers])
-        scalar_names.add(stem + "Top")
         scalars = [
             "    /// 말풍선을 얹을 그림 꼭대기(AppKit y). 선 두께는 빼고 경로 bbox 만 본다.\n"
             "    static let %sTop: CGFloat = %s" % (stem, num(box[3] if box else BOX))
         ]
         if "tailA" in groups:
-            scalar_names.add(stem + "TailAboveBody")
             scalars.append(
                 "    /// 원본 SVG 에서 꼬리가 몸통 뒤에 오면 false — 런타임이 그릇 레이어 순서를 맞춘다.\n"
                 "    static let %sTailAboveBody: Bool = %s" % (stem, "true" if tail_above else "false")
             )
 
-        files[POSE_FILE % stem] = (
-            (POSE_HEADER % stem) + "\n"
+        files[CONCEPT_POSE_FILE % (concept, pose)] = (
+            (CONCEPT_POSE_HEADER % path) + "\n"
             + "\n\n".join(scalars + sections) + "\n}\n\n"
             + "\n\n".join(data) + "\n"
         )
+        concept_poses[concept][pose] = {
+            "stem": stem,
+            "tailA": "tailA" in groups,
+            "tailB": "tailB" in groups,
+            # TailAboveBody 상수는 tailA 가 있을 때만 나온다 — 있으면 그 상수를 참조하고(값은 거기 산다), 없으면 false.
+            "tailAbove": "tailA" in groups,
+            "recolorable": recolorable,
+        }
 
     if not files:
         fail("변환할 도형이 없다")
-    aliases = fallback_aliases(set(stems), section_names, scalar_names)
-    files[SHARED_FILE] = SHARED_HEADER + "\n" + "".join(text + "\n" for text in aliases) + "}\n"
+    body_parts = [concept_set(c, concept_poses[c]) for c in concept_order]
+    body_parts.append(concept_switch(concept_order))
+    files[SHARED_FILE] = SHARED_HEADER + "\n" + "\n\n".join(body_parts) + "\n}\n"
     return files
 
 
@@ -1103,7 +1187,26 @@ def write_files(out_dir, files):
     return sorted(files), removed
 
 
-USAGE = "사용법: svg2swift.py [--out-dir <디렉터리>] <입력.svg> [입력2.svg ...]"
+USAGE = ("사용법: svg2swift.py [--out-dir <디렉터리>] <컨셉:포즈=입력.svg> [<컨셉:포즈=입력2.svg> ...]\n"
+         "  예: svg2swift.py --out-dir Sources/ClaudeCats "
+         "team:sitting=Design/cats/sitting.svg kenji:sitting=Design/cats/kenji-sitting.svg")
+
+
+def parse_inputs(tokens):
+    """['컨셉:포즈=경로', ...] → [(컨셉, 포즈, 경로)] (순서 유지)."""
+    inputs = []
+    for token in tokens:
+        if ":" not in token or "=" not in token or token.index(":") > token.index("="):
+            fail("입력은 '컨셉:포즈=경로' 형식이어야 한다: %r\n%s" % (token, USAGE))
+        left, path = token.split("=", 1)
+        concept, pose = left.split(":", 1)
+        concept, pose, path = concept.strip(), pose.strip(), path.strip()
+        if not concept or not path:
+            fail("입력의 컨셉·경로가 비었다: %r" % token)
+        if pose not in POSE_ORDER:
+            fail("모르는 포즈 %r — %s 중 하나여야 한다" % (pose, ", ".join(POSE_ORDER)))
+        inputs.append((concept, pose, path))
+    return inputs
 
 
 def main(argv):
@@ -1118,7 +1221,7 @@ def main(argv):
     if not args:
         fail(USAGE)
 
-    files = convert_files(args)
+    files = convert_files(parse_inputs(args))
     if out_dir is None:
         # 디렉터리를 안 주면 전부 이어서 stdout 에 찍는다(눈으로 볼 때만 쓴다).
         sys.stdout.write("\n".join(files[name] for name in sorted(files)))

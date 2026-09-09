@@ -398,11 +398,28 @@ class WriteFilesTests(unittest.TestCase):
 
 
 class RealArtTests(unittest.TestCase):
+    # 입력 경로가 생성 파일 헤더 주석에 그대로 박히므로, generate-cat-art.sh 와 똑같이
+    # REPO 를 cwd 로 두고 **repo 상대 경로**로 부른다(그래야 커밋된 헤더와 바이트가 같다).
     def setUp(self):
-        self.sitting = os.path.join(REPO, "Design", "cats", "sitting.svg")
-        self.sleeping = os.path.join(REPO, "Design", "cats", "sleeping.svg")
-        self.alert = os.path.join(REPO, "Design", "cats", "alert.svg")
+        self._cwd = os.getcwd()
+        os.chdir(REPO)
+        self.sitting = os.path.join("Design", "cats", "sitting.svg")
+        self.sleeping = os.path.join("Design", "cats", "sleeping.svg")
+        self.alert = os.path.join("Design", "cats", "alert.svg")
+        self.kenji_sitting = os.path.join("Design", "cats", "kenji-sitting.svg")
+        self.kenji_sleeping = os.path.join("Design", "cats", "kenji-sleeping.svg")
         self.all_poses = (self.sitting, self.sleeping, self.alert)
+        # 커밋된 생성물과 짝을 이루는 컨셉·포즈·경로 입력.
+        self.inputs = [
+            ("team", "sitting", self.sitting),
+            ("team", "sleeping", self.sleeping),
+            ("team", "alert", self.alert),
+            ("kenji", "sitting", self.kenji_sitting),
+            ("kenji", "sleeping", self.kenji_sleeping),
+        ]
+
+    def tearDown(self):
+        os.chdir(self._cwd)
 
     def test_groups_split(self):
         with open(self.sitting, encoding="utf-8") as f:
@@ -412,69 +429,99 @@ class RealArtTests(unittest.TestCase):
         self.assertIn("tailB", groups)
         self.assertTrue(all(groups[k] for k in ("body", "tailA", "tailB")))
 
-    def joined(self, paths):
+    def joined(self, inputs=None):
         """생성 파일 전부를 한 덩어리로 — "어딘가에는 있어야 한다" 류 검사용."""
-        files = S.convert_files(list(paths))
+        files = S.convert_files(list(inputs if inputs is not None else self.inputs))
         return "\n".join(files[name] for name in sorted(files))
 
     def test_generated_swift_has_all_constants(self):
-        swift = self.joined(self.all_poses)
-        for name in ("sittingBody", "sittingTailA", "sittingTailB", "sleepingBody",
-                     "alertBody", "alertTailA", "alertTailB"):
+        swift = self.joined()
+        for name in ("teamSittingBody", "teamSittingTailA", "teamSittingTailB",
+                     "teamSleepingBody", "teamAlertBody", "teamAlertTailA", "teamAlertTailB",
+                     "kenjiSittingBody", "kenjiSleepingBody"):
             self.assertIn("static let %s: [CatArtLayer]" % name, swift)
         self.assertIn("GENERATED", swift)
 
     def test_generated_swift_has_scalars(self):
-        swift = self.joined(self.all_poses)
-        self.assertIn("static let sittingTailAboveBody: Bool", swift)
-        self.assertIn("static let sittingTop: CGFloat", swift)
-        self.assertIn("static let sleepingTop: CGFloat", swift)
-        self.assertIn("static let alertTop: CGFloat", swift)
-        self.assertIn("static let alertTailAboveBody: Bool", swift)
+        swift = self.joined()
+        self.assertIn("static let teamSittingTailAboveBody: Bool", swift)
+        self.assertIn("static let teamSittingTop: CGFloat", swift)
+        self.assertIn("static let teamSleepingTop: CGFloat", swift)
+        self.assertIn("static let teamAlertTop: CGFloat", swift)
+        self.assertIn("static let teamAlertTailAboveBody: Bool", swift)
+        self.assertIn("static let kenjiSittingTop: CGFloat", swift)
         # 자는 자세는 꼬리 프레임이 없으므로 z 순서 상수도 나오지 않는다.
-        self.assertNotIn("sleepingTailAboveBody", swift)
+        self.assertNotIn("teamSleepingTailAboveBody", swift)
+        # 켄지는 꼬리 프레임이 없어 어느 포즈에도 TailAboveBody 상수가 없다.
+        self.assertNotIn("kenjiSittingTailAboveBody", swift)
+
+    def test_shared_file_has_concept_sets_and_switch(self):
+        shared = S.convert_files(list(self.inputs))["CatArt.generated.swift"]
+        self.assertIn("struct CatArtSet", shared)
+        self.assertIn("static let team = CatArtSet(", shared)
+        self.assertIn("static let kenji = CatArtSet(", shared)
+        self.assertIn("static func set(_ concept: CatConcept) -> CatArtSet", shared)
+        self.assertIn("case .team: return team", shared)
+        self.assertIn("case .kenji: return kenji", shared)
+
+    def test_kenji_set_uses_empty_tails_and_sitting_for_alert(self):
+        """켄지는 꼬리 프레임도 alert 원본도 없다 — 꼬리 배열은 비고 alert 는 sitting 으로 폴백한다."""
+        shared = S.convert_files(list(self.inputs))["CatArt.generated.swift"]
+        block = shared.split("static let kenji = CatArtSet(", 1)[1].split(")", 1)[0]
+        self.assertIn("sittingTailA: [],", block)
+        self.assertIn("sittingTailB: [],", block)
+        self.assertIn("alertBody: kenjiSittingBody,", block)
+        self.assertIn("alertTailA: [],", block)
+        self.assertIn("sittingTailAboveBody: false,", block)
+        # 켄지도 팔레트로 색을 입힌다(FUR/FURDARK 매핑).
+        self.assertIn("recolorable: true", block)
+
+    def test_team_set_uses_its_own_alert_art(self):
+        shared = S.convert_files(list(self.inputs))["CatArt.generated.swift"]
+        block = shared.split("static let team = CatArtSet(", 1)[1].split(")", 1)[0]
+        self.assertIn("alertBody: teamAlertBody,", block)
+        self.assertIn("sittingTailA: teamSittingTailA,", block)
+        self.assertIn("recolorable: true", block)
 
     def test_alert_groups_split_like_sitting(self):
         with open(self.alert, encoding="utf-8") as f:
             groups = S.parse_svg(f.read())
         self.assertTrue(all(groups[k] for k in ("body", "tailA", "tailB")))
 
-    def test_missing_alert_svg_falls_back_to_sitting(self):
-        """alert.svg 를 아직 안 그렸어도 런타임이 참조하는 alert* 상수는 나와야 한다."""
-        files = S.convert_files([self.sitting, self.sleeping])
-        self.assertNotIn("CatArt.alert.generated.swift", files)
+    def test_missing_alert_svg_falls_back_to_sitting_in_the_set(self):
+        """team alert 원본이 없으면 CatArtSet 이 sitting 을 alert 로 쓴다(런타임이 alert* 를 참조)."""
+        files = S.convert_files([("team", "sitting", self.sitting),
+                                 ("team", "sleeping", self.sleeping)])
+        self.assertNotIn("CatArt.team.alert.generated.swift", files)
         shared = files["CatArt.generated.swift"]
-        self.assertIn("static let alertBody: [CatArtLayer] = sittingBody", shared)
-        self.assertIn("static let alertTailA: [CatArtLayer] = sittingTailA", shared)
-        self.assertIn("static let alertTailB: [CatArtLayer] = sittingTailB", shared)
-        self.assertIn("static let alertTop: CGFloat = sittingTop", shared)
-        self.assertIn("static let alertTailAboveBody: Bool = sittingTailAboveBody", shared)
+        block = shared.split("static let team = CatArtSet(", 1)[1].split(")", 1)[0]
+        self.assertIn("alertBody: teamSittingBody,", block)
+        self.assertIn("alertTailA: teamSittingTailA,", block)
+        self.assertIn("alertTop: teamSittingTop,", block)
+        self.assertIn("alertTailAboveBody: teamSittingTailAboveBody,", block)
 
-    def test_real_alert_svg_beats_the_fallback(self):
-        swift = self.joined(self.all_poses)
-        self.assertNotIn("= sittingBody", swift)
-        self.assertNotIn("= sittingTop", swift)
-
-    def test_one_file_per_pose_plus_a_shared_one(self):
-        files = S.convert_files(list(self.all_poses))
+    def test_one_file_per_concept_pose_plus_a_shared_one(self):
+        files = S.convert_files(list(self.inputs))
         self.assertEqual(sorted(files), [
-            "CatArt.alert.generated.swift",
             "CatArt.generated.swift",
-            "CatArt.sitting.generated.swift",
-            "CatArt.sleeping.generated.swift",
+            "CatArt.kenji.sitting.generated.swift",
+            "CatArt.kenji.sleeping.generated.swift",
+            "CatArt.team.alert.generated.swift",
+            "CatArt.team.sitting.generated.swift",
+            "CatArt.team.sleeping.generated.swift",
         ])
 
-    def test_pose_file_holds_only_its_own_pose(self):
-        """포즈 하나만 고쳤을 때 그 파일만 다시 컴파일되려면 서로 안 섞여야 한다."""
-        files = S.convert_files(list(self.all_poses))
-        sitting = files["CatArt.sitting.generated.swift"]
-        self.assertIn("static let sittingBody: [CatArtLayer]", sitting)
-        self.assertIn("static let sittingTop: CGFloat", sitting)
-        for other in ("sleeping", "alert"):
+    def test_pose_file_holds_only_its_own_concept_pose(self):
+        """컨셉·포즈 하나만 고쳤을 때 그 파일만 다시 컴파일되려면 서로 안 섞여야 한다."""
+        files = S.convert_files(list(self.inputs))
+        sitting = files["CatArt.team.sitting.generated.swift"]
+        self.assertIn("static let teamSittingBody: [CatArtLayer]", sitting)
+        self.assertIn("static let teamSittingTop: CGFloat", sitting)
+        for other in ("sleeping", "alert", "kenji"):
             self.assertNotIn(other, sitting)
 
     def test_shared_file_has_the_types_and_no_coordinates(self):
-        shared = S.convert_files(list(self.all_poses))["CatArt.generated.swift"]
+        shared = S.convert_files(list(self.inputs))["CatArt.generated.swift"]
         self.assertIn("struct CatArtLayer", shared)
         self.assertIn("enum CatArtColor", shared)
         self.assertNotIn("[Float]", shared)
@@ -482,15 +529,15 @@ class RealArtTests(unittest.TestCase):
 
     def test_paths_are_data_not_statements(self):
         """경로는 CGMutablePath 문장이 아니라 [Float] 리터럴로 나가야 한다(issue #4)."""
-        swift = self.joined(self.all_poses)
+        swift = self.joined()
         self.assertNotIn("CGMutablePath", swift)
         self.assertNotIn("addCurve", swift)
-        self.assertIn("private let sittingBody0: [Float] = [", swift)
-        self.assertIn("path: PathData.build(sittingBody0),", swift)
+        self.assertIn("private let teamSittingBody0: [Float] = [", swift)
+        self.assertIn("path: PathData.build(teamSittingBody0),", swift)
 
     def test_every_layer_gets_its_own_data_array(self):
         import re
-        sitting = S.convert_files(list(self.all_poses))["CatArt.sitting.generated.swift"]
+        sitting = S.convert_files(list(self.inputs))["CatArt.team.sitting.generated.swift"]
         used = re.findall(r"PathData\.build\((\w+)\)", sitting)
         declared = re.findall(r"private let (\w+): \[Float\] = \[", sitting)
         self.assertEqual(sorted(used), sorted(declared))
@@ -503,7 +550,7 @@ class RealArtTests(unittest.TestCase):
         고치는 법: `scripts/generate-cat-art.sh`.
         """
         out_dir = os.path.join(REPO, "Sources", "ClaudeCats")
-        files = S.convert_files(list(self.all_poses))
+        files = S.convert_files(list(self.inputs))
         on_disk = sorted(
             name for name in os.listdir(out_dir)
             if name.startswith("CatArt.") and name.endswith(".generated.swift")
@@ -516,7 +563,7 @@ class RealArtTests(unittest.TestCase):
 
     def test_encoded_art_round_trips_to_the_same_commands(self):
         """진짜 그림 전체가 인코딩 → 디코딩을 거쳐도 명령이 그대로여야 한다."""
-        for path in self.all_poses:
+        for _, _, path in self.inputs:
             with open(path, encoding="utf-8") as f:
                 groups = S.parse_svg(f.read())
             for layers in groups.values():
@@ -524,7 +571,7 @@ class RealArtTests(unittest.TestCase):
                     self.assertEqual(S.decode_path(S.encode_path(layer.cmds)), layer.cmds)
 
     def test_top_is_inside_the_box_and_above_the_middle(self):
-        for path in self.all_poses:
+        for _, _, path in self.inputs:
             with open(path, encoding="utf-8") as f:
                 groups = S.parse_svg(f.read())
             box = S.layers_bounds([l for layers in groups.values() for l in layers])
@@ -532,7 +579,7 @@ class RealArtTests(unittest.TestCase):
             self.assertLessEqual(box[3], 64)
 
     def test_all_coordinates_in_range(self):
-        for path in self.all_poses:
+        for _, _, path in self.inputs:
             with open(path, encoding="utf-8") as f:
                 groups = S.parse_svg(f.read())
             for name, layers in groups.items():
@@ -547,6 +594,17 @@ class RealArtTests(unittest.TestCase):
             groups = S.parse_svg(f.read())
         paints = [layer.fill for layer in groups["body"]] + [layer.stroke for layer in groups["tailA"]]
         self.assertIn(S.FUR, paints)
+
+    def test_kenji_body_uses_fur_and_fur_dark_placeholders(self):
+        """켄지 몸통 주색·음영은 팔레트 플레이스홀더로 치환된다(recolorable)."""
+        with open(self.kenji_sitting, encoding="utf-8") as f:
+            groups = S.parse_svg(f.read())
+        paints = [layer.fill for layer in groups["body"]]
+        self.assertIn(S.FUR, paints)
+        self.assertIn(S.FUR_DARK, paints)
+        # 켄지는 꼬리 프레임이 없다.
+        self.assertNotIn("tailA", groups)
+        self.assertNotIn("tailB", groups)
 
 
 if __name__ == "__main__":

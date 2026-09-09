@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let preferredDisplayKey = "preferredDisplayName"
     /// 창 레벨 선택(`WindowPlacement` raw value). 키가 없으면 `.desktop`.
     private static let windowPlacementKey = "windowPlacement"
+    /// 고양이 종류 선택(`CatConcept` raw value). 키가 없으면 `.team`(푹신캣).
+    private static let catConceptKey = "catConcept"
 
     private var window: DesktopWindow!
     private var controller: AppController!
@@ -22,8 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let defaults = UserDefaults.standard
         let preferredDisplay = defaults.string(forKey: Self.preferredDisplayKey)
         let placement = WindowPlacement.stored(defaults.string(forKey: Self.windowPlacementKey))
+        let concept = CatConcept.stored(defaults.string(forKey: Self.catConceptKey))
         // 첫 렌더 전에 화면을 정해야 Scene 이 그 화면 크기로 배치된다.
-        window = DesktopWindow(preferredDisplayName: preferredDisplay, placement: placement)
+        window = DesktopWindow(preferredDisplayName: preferredDisplay, placement: placement, concept: concept)
         controller = AppController(collector: collector, window: window)
 
         NotificationCenter.default.addObserver(
@@ -52,10 +55,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 defaults.set(placement.rawValue, forKey: Self.windowPlacementKey)
                 self.window.setPlacement(placement)
+            },
+            onConceptSelect: { [weak self] concept in
+                guard let self else { return }
+                defaults.set(concept.rawValue, forKey: Self.catConceptKey)
+                self.window.setConcept(concept)
             }
         )
         menu.setPreferredDisplayName(preferredDisplay)
         menu.setPlacement(placement)
+        menu.setConcept(concept)
         controller.onSnapshot = { [weak self] snapshot in self?.menu.update(with: snapshot) }
 
         power = PowerMonitor()

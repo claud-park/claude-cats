@@ -15,6 +15,8 @@ final class StatusMenu: NSObject {
     private let displayMenu = NSMenu()
     private let placementItem = NSMenuItem(title: "표시 위치", action: nil, keyEquivalent: "")
     private let placementMenu = NSMenu()
+    private let conceptItem = NSMenuItem(title: "고양이 종류", action: nil, keyEquivalent: "")
+    private let conceptMenu = NSMenu()
     private let hooksItem = NSMenuItem(title: "알림 연동", action: #selector(toggleHooks), keyEquivalent: "")
     /// 읽기 전용 버전 줄. 번들에 박힌 커밋을 그대로 보여준다.
     private let versionItem = NSMenuItem(title: "버전", action: nil, keyEquivalent: "")
@@ -26,10 +28,12 @@ final class StatusMenu: NSObject {
     private let onRefresh: () -> Void
     private let onDisplaySelect: (String?) -> Void
     private let onPlacementSelect: (WindowPlacement) -> Void
+    private let onConceptSelect: (CatConcept) -> Void
     private let updater = Updater()
     private var paused = false
     private var preferredDisplayName: String?
     private var placement: WindowPlacement = .desktop
+    private var concept: CatConcept = .team
     /// 마지막 폴링이 만든 요약 문자열. 업데이트 중에는 이 자리를 진행 표시가 빌려 쓴다.
     private var summaryText = "고양이 0마리"
     /// 메뉴바 아이콘이 실제 이미지인지. 배지(`•`)를 어디에 붙일지가 달라진다.
@@ -39,12 +43,14 @@ final class StatusMenu: NSObject {
         onPauseToggle: @escaping (Bool) -> Void,
         onRefresh: @escaping () -> Void,
         onDisplaySelect: @escaping (String?) -> Void,
-        onPlacementSelect: @escaping (WindowPlacement) -> Void
+        onPlacementSelect: @escaping (WindowPlacement) -> Void,
+        onConceptSelect: @escaping (CatConcept) -> Void
     ) {
         self.onPauseToggle = onPauseToggle
         self.onRefresh = onRefresh
         self.onDisplaySelect = onDisplaySelect
         self.onPlacementSelect = onPlacementSelect
+        self.onConceptSelect = onConceptSelect
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -70,7 +76,7 @@ final class StatusMenu: NSObject {
         healthItem.isEnabled = false                                   // 읽기 전용 경고 줄
         healthItem.isHidden = true                                     // 문제가 있을 때만 보인다
         versionItem.isEnabled = false                                  // 읽기 전용 버전 줄
-        for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, hooksItem] {
+        for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, conceptItem, hooksItem] {
             entry.isEnabled = true
         }
         for entry in [pauseItem, refresh, loginItem, hooksItem, updateItem, autoUpdateItem] {
@@ -85,6 +91,9 @@ final class StatusMenu: NSObject {
         // 표시 위치는 세 개로 고정이라 한 번만 만들고 체크 표시만 갈아 끼운다.
         placementMenu.autoenablesItems = false
         placementItem.submenu = placementMenu
+        // 고양이 종류도 고정 목록이라 한 번 만들고 체크 표시만 갈아 끼운다.
+        conceptMenu.autoenablesItems = false
+        conceptItem.submenu = conceptMenu
         // 훅 체크 표시는 파일이 진실이다(다른 앱·사용자가 지웠을 수 있다). 열 때마다 다시 읽는다.
         menu.delegate = self
 
@@ -100,6 +109,7 @@ final class StatusMenu: NSObject {
         menu.addItem(.separator())
         menu.addItem(displayItem)
         menu.addItem(placementItem)
+        menu.addItem(conceptItem)
         menu.addItem(hooksItem)
         menu.addItem(.separator())
         menu.addItem(loginItem)
@@ -110,6 +120,7 @@ final class StatusMenu: NSObject {
         updateHooksState()
         rebuildDisplayMenu()
         rebuildPlacementMenu()
+        rebuildConceptMenu()
 
         updater.onChange = { [weak self] in self?.renderUpdate() }
         renderUpdate()
@@ -167,6 +178,31 @@ final class StatusMenu: NSObject {
         placement = new
         rebuildPlacementMenu()
         onPlacementSelect(new)
+    }
+
+    /// 현재 고양이 종류 선택을 알려준다. 메뉴 체크 표시에만 쓴다.
+    func setConcept(_ new: CatConcept) {
+        concept = new
+        rebuildConceptMenu()
+    }
+
+    private func rebuildConceptMenu() {
+        conceptMenu.removeAllItems()
+        for entry in CatConcept.menuEntries(selected: concept) {
+            let menuItem = NSMenuItem(title: entry.title, action: #selector(selectConcept(_:)), keyEquivalent: "")
+            menuItem.target = self
+            menuItem.isEnabled = true
+            menuItem.state = entry.isSelected ? .on : .off
+            menuItem.representedObject = entry.concept.rawValue
+            conceptMenu.addItem(menuItem)
+        }
+    }
+
+    @objc private func selectConcept(_ sender: NSMenuItem) {
+        let new = CatConcept.stored(sender.representedObject as? String)
+        concept = new
+        rebuildConceptMenu()
+        onConceptSelect(new)
     }
 
     func update(with snapshot: Snapshot) {
