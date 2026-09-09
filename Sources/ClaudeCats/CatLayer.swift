@@ -8,7 +8,7 @@ import ClaudeCatsCore
 /// 메인 스레드에서만 사용한다 (DesktopWindow 가 유일한 호출자)
 final class CatLayer: CALayer {
     private(set) var placement: CatPlacement
-    /// 지금 그리는 고양이 종류의 아트 묶음. 종류가 바뀌면 `setArt` 로 갈아끼우고 몸·꼬리를 다시 만든다.
+    /// 지금 그리는 동물 종류의 아트 묶음. 종류가 바뀌면 `setArt` 로 갈아끼우고 몸·꼬리를 다시 만든다.
     private var art: CatArtSet
     /// 이 종류·포즈에 꼬리 프레임이 있는지. 없으면(동글캣) `tickTail` 은 아무것도 안 한다.
     private var hasTailFrames = false
@@ -152,7 +152,7 @@ final class CatLayer: CALayer {
         tailB.isHidden = !tailToggle
     }
 
-    /// 고양이 종류가 바뀌면(메뉴 `고양이 종류`) 아트 묶음을 갈아끼우고 몸·꼬리를 다시 만든다.
+    /// 동물 종류가 바뀌면(메뉴 `동물 종류`) 아트 묶음을 갈아끼우고 몸·꼬리를 다시 만든다.
     /// 포즈가 바뀔 때와 같은 경로다 — 종류마다 그림·색·말풍선 꼭대기(Top)가 다르다.
     func setArt(_ newArt: CatArtSet) {
         art = newArt

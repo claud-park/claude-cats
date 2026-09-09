@@ -15,7 +15,7 @@ final class StatusMenu: NSObject {
     private let displayMenu = NSMenu()
     private let placementItem = NSMenuItem(title: "표시 위치", action: nil, keyEquivalent: "")
     private let placementMenu = NSMenu()
-    private let conceptItem = NSMenuItem(title: "고양이 종류", action: nil, keyEquivalent: "")
+    private let conceptItem = NSMenuItem(title: "동물 종류", action: nil, keyEquivalent: "")
     private let conceptMenu = NSMenu()
     private let hooksItem = NSMenuItem(title: "알림 연동", action: #selector(toggleHooks), keyEquivalent: "")
     /// Dock 아이콘 표시 토글. 노치 MacBook 처럼 메뉴바가 꽉 차 아이콘이 숨는 환경에서
@@ -99,7 +99,7 @@ final class StatusMenu: NSObject {
         // 표시 위치는 세 개로 고정이라 한 번만 만들고 체크 표시만 갈아 끼운다.
         placementMenu.autoenablesItems = false
         placementItem.submenu = placementMenu
-        // 고양이 종류도 고정 목록이라 한 번 만들고 체크 표시만 갈아 끼운다.
+        // 동물 종류도 고정 목록이라 한 번 만들고 체크 표시만 갈아 끼운다.
         conceptMenu.autoenablesItems = false
         conceptItem.submenu = conceptMenu
         // 훅 체크 표시는 파일이 진실이다(다른 앱·사용자가 지웠을 수 있다). 열 때마다 다시 읽는다.
@@ -206,7 +206,7 @@ final class StatusMenu: NSObject {
         onPlacementSelect(new)
     }
 
-    /// 현재 고양이 종류 선택을 알려준다. 메뉴 체크 표시에만 쓴다.
+    /// 현재 동물 종류 선택을 알려준다. 메뉴 체크 표시에만 쓴다.
     func setConcept(_ new: CatConcept) {
         concept = new
         rebuildConceptMenu()
