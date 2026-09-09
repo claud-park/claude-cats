@@ -11,21 +11,27 @@ final class StatusMenu: NSObject {
     private let loginItem = NSMenuItem(title: "로그인 시 시작", action: #selector(toggleLogin), keyEquivalent: "")
     private let displayItem = NSMenuItem(title: "디스플레이", action: nil, keyEquivalent: "")
     private let displayMenu = NSMenu()
+    private let placementItem = NSMenuItem(title: "표시 위치", action: nil, keyEquivalent: "")
+    private let placementMenu = NSMenu()
     private let hooksItem = NSMenuItem(title: "알림 연동", action: #selector(toggleHooks), keyEquivalent: "")
     private let onPauseToggle: (Bool) -> Void
     private let onRefresh: () -> Void
     private let onDisplaySelect: (String?) -> Void
+    private let onPlacementSelect: (WindowPlacement) -> Void
     private var paused = false
     private var preferredDisplayName: String?
+    private var placement: WindowPlacement = .desktop
 
     init(
         onPauseToggle: @escaping (Bool) -> Void,
         onRefresh: @escaping () -> Void,
-        onDisplaySelect: @escaping (String?) -> Void
+        onDisplaySelect: @escaping (String?) -> Void,
+        onPlacementSelect: @escaping (WindowPlacement) -> Void
     ) {
         self.onPauseToggle = onPauseToggle
         self.onRefresh = onRefresh
         self.onDisplaySelect = onDisplaySelect
+        self.onPlacementSelect = onPlacementSelect
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
@@ -47,7 +53,9 @@ final class StatusMenu: NSObject {
         let quit = NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         summaryItem.isEnabled = false                                  // 읽기 전용 요약 줄
-        for entry in [pauseItem, refresh, loginItem, quit, displayItem, hooksItem] { entry.isEnabled = true }
+        for entry in [pauseItem, refresh, loginItem, quit, displayItem, placementItem, hooksItem] {
+            entry.isEnabled = true
+        }
         for entry in [pauseItem, refresh, loginItem, hooksItem] { entry.target = self }
         // quit 은 target 없이 응답 체인을 타고 NSApp.terminate 로 간다.
 
@@ -55,6 +63,9 @@ final class StatusMenu: NSObject {
         displayMenu.autoenablesItems = false
         displayMenu.delegate = self
         displayItem.submenu = displayMenu
+        // 표시 위치는 세 개로 고정이라 한 번만 만들고 체크 표시만 갈아 끼운다.
+        placementMenu.autoenablesItems = false
+        placementItem.submenu = placementMenu
         // 훅 체크 표시는 파일이 진실이다(다른 앱·사용자가 지웠을 수 있다). 열 때마다 다시 읽는다.
         menu.delegate = self
 
@@ -63,6 +74,7 @@ final class StatusMenu: NSObject {
         menu.addItem(pauseItem)
         menu.addItem(refresh)
         menu.addItem(displayItem)
+        menu.addItem(placementItem)
         menu.addItem(hooksItem)
         menu.addItem(.separator())
         menu.addItem(loginItem)
@@ -72,6 +84,7 @@ final class StatusMenu: NSObject {
         updateLoginState()
         updateHooksState()
         rebuildDisplayMenu()
+        rebuildPlacementMenu()
     }
 
     /// 현재 선택(자동 = nil)을 알려준다. 메뉴 체크 표시에만 쓴다.
@@ -100,6 +113,31 @@ final class StatusMenu: NSObject {
         preferredDisplayName = name
         rebuildDisplayMenu()
         onDisplaySelect(name)
+    }
+
+    /// 현재 창 레벨 선택을 알려준다. 메뉴 체크 표시에만 쓴다.
+    func setPlacement(_ new: WindowPlacement) {
+        placement = new
+        rebuildPlacementMenu()
+    }
+
+    private func rebuildPlacementMenu() {
+        placementMenu.removeAllItems()
+        for entry in WindowPlacement.menuEntries(selected: placement) {
+            let menuItem = NSMenuItem(title: entry.title, action: #selector(selectPlacement(_:)), keyEquivalent: "")
+            menuItem.target = self
+            menuItem.isEnabled = true
+            menuItem.state = entry.isSelected ? .on : .off
+            menuItem.representedObject = entry.placement.rawValue
+            placementMenu.addItem(menuItem)
+        }
+    }
+
+    @objc private func selectPlacement(_ sender: NSMenuItem) {
+        let new = WindowPlacement.stored(sender.representedObject as? String)
+        placement = new
+        rebuildPlacementMenu()
+        onPlacementSelect(new)
     }
 
     func update(with snapshot: Snapshot) {

@@ -30,6 +30,9 @@ final class DesktopWindow {
     /// `visibleFrame` 위에 올려 하단 Dock 에 묻히지 않게 한다. `refitToScreen` 에서 다시 잰다.
     private(set) var sceneBottomInset: CGFloat = SceneConfig().bottomInset
 
+    /// 지금 창 레벨. 화면을 다시 맞춰도 유지된다.
+    private var placement: WindowPlacement
+
     /// 선택한 이름의 디스플레이. 이름이 안 맞거나(뽑아버린 모니터) 없으면 메인으로 폴백한다.
     /// 저장 프로퍼티가 다 차기 전(init)에도 불러야 해서 static 이다.
     private static func targetScreen(preferredDisplayName: String?) -> NSScreen? {
@@ -57,8 +60,9 @@ final class DesktopWindow {
         )
     }
 
-    init(preferredDisplayName: String? = nil) {
+    init(preferredDisplayName: String? = nil, placement: WindowPlacement = .desktop) {
         self.preferredDisplayName = preferredDisplayName
+        self.placement = placement
         let screen = Self.targetScreen(preferredDisplayName: preferredDisplayName)
         let frame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let scale = screen?.backingScaleFactor ?? 2
@@ -70,8 +74,7 @@ final class DesktopWindow {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.isReleasedWhenClosed = false
-        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        Self.apply(placement, to: window)
 
         contentView = DesktopContentView(frame: NSRect(origin: .zero, size: frame.size))
         rootLayer.contentsScale = scale
@@ -90,6 +93,29 @@ final class DesktopWindow {
     func setPreferredDisplay(_ name: String?) {
         preferredDisplayName = name
         refitToScreen()
+    }
+
+    /// 메뉴에서 `표시 위치` 를 고르면 호출된다. 창을 다시 만들지 않고 레벨만 바꾼다.
+    func setPlacement(_ new: WindowPlacement) {
+        guard new != placement else { return }
+        placement = new
+        Self.apply(new, to: window)
+    }
+
+    /// `WindowPlacement` → 실제 `NSWindow.Level` · collectionBehavior.
+    private static func apply(_ placement: WindowPlacement, to window: NSWindow) {
+        switch placement.levelOffset {
+        case let .desktopIcon(offset):
+            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + offset)
+        case .floating:
+            window.level = .floating
+        }
+        // 모든 스페이스에 남고(canJoinAllSpaces), 스페이스를 바꿔도 따라 움직이지 않고(stationary),
+        // ⌘⇥ 순환에서 빠진다(ignoresCycle). `항상 위` 일 때만 전체화면 앱 위에도 뜨게
+        // fullScreenAuxiliary 를 더한다 — 클릭은 ignoresMouseEvents 로 통과하므로 포커스를 뺏지 않는다.
+        var behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        if placement == .alwaysOnTop { behavior.insert(.fullScreenAuxiliary) }
+        window.collectionBehavior = behavior
     }
 
     func refitToScreen() {
