@@ -1,6 +1,6 @@
 import AppKit
 
-/// 고양이 아트의 상자 크기와 털색 팔레트. 도형 자체는 `CatArt.generated.swift` 에 있다
+/// 고양이 아트의 상자 크기와 털색 팔레트. 도형 자체는 `CatArt.<포즈>.generated.swift` 에 있다
 /// (Design/cats/*.svg → scripts/generate-cat-art.sh).
 enum CatShapes {
     static let boxSize: CGFloat = 64
