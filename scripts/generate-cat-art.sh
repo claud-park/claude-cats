@@ -63,6 +63,23 @@ for POSE in sitting sleeping; do
   fi
 done
 
+# 빠릿개(pparit). 꼬리 프레임·alert 원본 없음 → 두 포즈 다 정적으로 import.
+#
+# 색: 푹신캣처럼 3톤 전부 세션 팔레트로 갈린다(몸통 전체가 세션색으로).
+#   #E5DAD0 (가장 큰 영역, 몸통 주색) → #FUR
+#   #D5C5BD (더 어두운 털 음영)        → #FURDARK
+#   #F5EEE5 (밝은 털 하이라이트)       → #FURLIGHT
+# 고정: #E8969C(혀·코 핑크), #B87A76(귀 안쪽), #65514C·#3C322E(눈·윤곽).
+for POSE in sitting sleeping; do
+  SRC="Design/cats/source/pparit-$POSE-figma.svg"
+  if [ -f "$SRC" ]; then
+    python3 scripts/import-cat-svg.py "$SRC" \
+      --pose sleeping \
+      --out "Design/cats/pparit-$POSE.svg" \
+      --fur "#E5DAD0" --fur-dark "#D5C5BD" --fur-light "#F5EEE5"
+  fi
+done
+
 OUT_DIR="Sources/ClaudeCats"
 
 # 입력은 <컨셉:포즈=경로>. 컨셉·포즈마다 파일 하나가 나온다(CatArt.<컨셉>.<포즈>.generated.swift).
@@ -75,6 +92,8 @@ INPUTS="team:sitting=Design/cats/sitting.svg team:sleeping=Design/cats/sleeping.
 # 몽글개도 원본이 있을 때만(꼬리·alert 없음 → CatArtSet 이 빈 꼬리·sitting 폴백으로 채운다).
 [ -f Design/cats/monggle-sitting.svg ] && INPUTS="$INPUTS monggle:sitting=Design/cats/monggle-sitting.svg"
 [ -f Design/cats/monggle-sleeping.svg ] && INPUTS="$INPUTS monggle:sleeping=Design/cats/monggle-sleeping.svg"
+[ -f Design/cats/pparit-sitting.svg ] && INPUTS="$INPUTS pparit:sitting=Design/cats/pparit-sitting.svg"
+[ -f Design/cats/pparit-sleeping.svg ] && INPUTS="$INPUTS pparit:sleeping=Design/cats/pparit-sleeping.svg"
 
 # 생성기가 파일을 직접 쓰고, 더는 안 쓰는 예전 생성물은 스스로 지운다.
 # shellcheck disable=SC2086

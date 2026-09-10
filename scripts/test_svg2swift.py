@@ -410,6 +410,8 @@ class RealArtTests(unittest.TestCase):
         self.kenji_sleeping = os.path.join("Design", "cats", "kenji-sleeping.svg")
         self.monggle_sitting = os.path.join("Design", "cats", "monggle-sitting.svg")
         self.monggle_sleeping = os.path.join("Design", "cats", "monggle-sleeping.svg")
+        self.pparit_sitting = os.path.join("Design", "cats", "pparit-sitting.svg")
+        self.pparit_sleeping = os.path.join("Design", "cats", "pparit-sleeping.svg")
         self.all_poses = (self.sitting, self.sleeping, self.alert)
         # 커밋된 생성물과 짝을 이루는 컨셉·포즈·경로 입력.
         self.inputs = [
@@ -420,6 +422,8 @@ class RealArtTests(unittest.TestCase):
             ("kenji", "sleeping", self.kenji_sleeping),
             ("monggle", "sitting", self.monggle_sitting),
             ("monggle", "sleeping", self.monggle_sleeping),
+            ("pparit", "sitting", self.pparit_sitting),
+            ("pparit", "sleeping", self.pparit_sleeping),
         ]
 
     def tearDown(self):
@@ -512,6 +516,8 @@ class RealArtTests(unittest.TestCase):
             "CatArt.kenji.sleeping.generated.swift",
             "CatArt.monggle.sitting.generated.swift",
             "CatArt.monggle.sleeping.generated.swift",
+            "CatArt.pparit.sitting.generated.swift",
+            "CatArt.pparit.sleeping.generated.swift",
             "CatArt.team.alert.generated.swift",
             "CatArt.team.sitting.generated.swift",
             "CatArt.team.sleeping.generated.swift",
@@ -523,7 +529,7 @@ class RealArtTests(unittest.TestCase):
         sitting = files["CatArt.team.sitting.generated.swift"]
         self.assertIn("static let teamSittingBody: [CatArtLayer]", sitting)
         self.assertIn("static let teamSittingTop: CGFloat", sitting)
-        for other in ("sleeping", "alert", "kenji", "monggle"):
+        for other in ("sleeping", "alert", "kenji", "monggle", "pparit"):
             self.assertNotIn(other, sitting)
 
     def test_shared_file_has_the_types_and_no_coordinates(self):
