@@ -8,7 +8,7 @@
 busy 세션은 앉은 자세(꼬리가 1초마다 흔들린다), idle 세션은 웅크려 자는 자세다.
 [알림 연동](#알림-연동)을 켜면 사용자를 기다리는 세션은 세 번째 자세 + 노란 말풍선이 된다.
 
-<img width="455" height="148" alt="image" src="https://github.com/user-attachments/assets/17b9f98c-4ecb-4c4d-a30d-8c46edf44b02" />
+<img width="712" height="133" alt="image" src="https://github.com/user-attachments/assets/f57eb1f0-0f55-4a70-a13c-802657cb7f35" />
 
 
 
