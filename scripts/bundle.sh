@@ -87,7 +87,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>com.claudecats.app</string>
-  <key>CFBundleName</key><string>Claude Cats</string>
+  <key>CFBundleName</key><string>Claude Pets</string>
   <key>CFBundleExecutable</key><string>ClaudeCats</string>
 $ICON_KEY
   <key>CFBundlePackageType</key><string>APPL</string>
