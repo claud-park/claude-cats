@@ -7,15 +7,17 @@ import Testing
         #expect(CatConcept.team.rawValue == "team")
         #expect(CatConcept.kenji.rawValue == "kenji")
         #expect(CatConcept.monggle.rawValue == "monggle")
-        #expect(CatConcept.allCases.count == 3)
+        #expect(CatConcept.pparit.rawValue == "pparit")
+        #expect(CatConcept.allCases.count == 4)
     }
 
     @Test func titlesAreTheUserFacingNames() {
-        // 내부 식별자(team/kenji/monggle)와 다른, 메뉴·UI 표기.
+        // 내부 식별자(team/kenji/monggle/pparit)와 다른, 메뉴·UI 표기.
         #expect(CatConcept.team.title == "푹신캣")
         #expect(CatConcept.kenji.title == "동글캣")
         #expect(CatConcept.monggle.title == "몽글개")
-        #expect(Set(CatConcept.allCases.map(\.title)).count == 3)
+        #expect(CatConcept.pparit.title == "빠릿개")
+        #expect(Set(CatConcept.allCases.map(\.title)).count == 4)
     }
 
     // MARK: - stored
@@ -37,7 +39,7 @@ import Testing
     @Test func menuEntriesMarkExactlyOne() {
         for concept in CatConcept.allCases {
             let entries = CatConcept.menuEntries(selected: concept)
-            #expect(entries.count == 3)
+            #expect(entries.count == 4)
             #expect(entries.filter(\.isSelected).count == 1)
             #expect(entries.first(where: \.isSelected)?.concept == concept)
         }
